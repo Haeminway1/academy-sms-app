@@ -448,9 +448,14 @@ function settings_() {
 /** 설정 탭 항목을 고쳐 쓰거나 없으면 새 행으로 단다. */
 function setSetting_(key, value) {
   var s = sheet_(SHEET_SETTINGS);
-  var row = findRow_(SHEET_SETTINGS, '항목', key);
-  if (row) s.getRange(row, 2).setValue(value);
-  else s.appendRow([key, value]);
+  var header = headerValues_(SHEET_SETTINGS);
+  var matches = rowsAsObjects_(SHEET_SETTINGS).filter(function (r) { return str_(r['항목']) === key; });
+  if (matches.length) {
+    s.getRange(matches[0]._row, header.indexOf('값') + 1).setValue(value);
+    for (var i = matches.length - 1; i > 0; i--) s.deleteRow(matches[i]._row);
+  } else {
+    s.appendRow(header.map(function (h) { return h === '항목' ? key : h === '값' ? value : ''; }));
+  }
 }
 
 /** 발송기록의 '키' 열을 집합으로. 여기 있는 키는 다시 보내지 않는다. */
@@ -539,6 +544,10 @@ function saveClass(input) {
     var s = sheet_(SHEET_CLASSES);
     var row = findRow_(SHEET_CLASSES, '반', original);
     var dup = findRow_(SHEET_CLASSES, '반', name);
+    if (!row && dup) {
+      var existing = readClasses_().filter(function (c) { return c.name === name; })[0];
+      if (existing.days === days && existing.start === start) row = dup;
+    }
     if (dup && dup !== row) throw new Error('"' + name + '" 반이 이미 있습니다.');
     if (row) s.getRange(row, 1, 1, 3).setValues([[name, days, start]]);
     else s.appendRow([name, days, start]);
@@ -677,7 +686,7 @@ function getAttendance(dateStr, cls) {
 }
 
 /**
- * 출결 저장: 출결 탭에 한 줄씩 쓰고, 오늘이면 켜진 '결석/지각 저장 즉시'
+ * 출결 저장: 날짜·학생별 행을 갱신하고, 오늘이면 켜진 '결석/지각 저장 즉시'
  * 자동화를 바로 실행한다. 지난 날짜는 행만 쓰고 자동 문자를 건너뛴다.
  * @returns {{ok: boolean, sent: Array, note: (string|undefined)}}
  *   sent: [{ name, template, result }]
@@ -705,14 +714,31 @@ function saveAttendance(dateStr, rows, status) {
   lock.waitLock(LOCK_MS);
   try {
     var attend = sheet_(SHEET_ATTEND);
+    var attendRows = {};
+    var duplicates = [];
+    var targets = {};
+    list.forEach(function (r) { targets[date + '|' + str_(r && r.name)] = true; });
+    rowsAsObjects_(SHEET_ATTEND).forEach(function (r) {
+      var key = dateStr_(r['날짜']) + '|' + str_(r['이름']);
+      if (attendRows[key] && targets[key]) duplicates.push(attendRows[key]);
+      attendRows[key] = r._row;
+    });
+    list.forEach(function (r) {
+      if (!byName[str_(r && r.name)]) throw new Error('학생 탭에 "' + (r && r.name) + '" 학생이 없습니다.');
+      if (['등원', '지각', '결석'].indexOf(str_(r.status)) < 0) throw new Error('상태(등원·지각·결석)를 골라 주세요.');
+    });
     var keys = isToday ? sentKeys_() : {};
     var sent = [];
     list.forEach(function (r) {
       var s = byName[str_(r && r.name)];
-      if (!s) throw new Error('학생 탭에 "' + (r && r.name) + '" 학생이 없습니다.');
       var st2 = str_(r.status);
-      if (!st2) throw new Error('상태(등원·지각·결석)를 골라 주세요.');
-      attend.appendRow([date, s.name, s.cls, st2, hhmm]);
+      var attendKey = date + '|' + s.name;
+      var values = [[date, s.name, s.cls, st2, hhmm]];
+      if (attendRows[attendKey]) attend.getRange(attendRows[attendKey], 1, 1, 5).setValues(values);
+      else {
+        attend.appendRow(values[0]);
+        attendRows[attendKey] = attend.getLastRow();
+      }
       if (!isToday) return;
       var wantType = st2 === '결석' ? AUTO_ABSENT : st2 === '지각' ? AUTO_LATE_SAVE : null;
       if (!wantType) return;
@@ -738,6 +764,7 @@ function saveAttendance(dateStr, rows, status) {
         sent.push({ name: s.name, template: rule.template, result: result });
       });
     });
+    duplicates.sort(function (a, b) { return b - a; }).forEach(function (row) { attend.deleteRow(row); });
     var out = { ok: true, sent: sent };
     if (!isToday) out.note = '지난 날짜는 자동 문자를 보내지 않습니다';
     return out;
@@ -760,9 +787,20 @@ function saveTemplate(input) {
     var s = sheet_(SHEET_TEMPLATES);
     var row = findRow_(SHEET_TEMPLATES, '이름', original);
     var dup = findRow_(SHEET_TEMPLATES, '이름', name);
+    if (!row && dup) {
+      var existing = listTemplates_().filter(function (t) { return t.name === name; })[0];
+      if (existing.body === body && existing.note === note) row = dup;
+    }
     if (dup && dup !== row) throw new Error('"' + name + '" 템플릿이 이미 있습니다.');
     if (row) s.getRange(row, 1, 1, 3).setValues([[name, body, note]]);
     else s.appendRow([name, body, note]);
+    if (original !== name) {
+      var auto = sheet_(SHEET_AUTOMATIONS);
+      var col = headerValues_(SHEET_AUTOMATIONS).indexOf('템플릿') + 1;
+      rowsAsObjects_(SHEET_AUTOMATIONS).forEach(function (r) {
+        if (str_(r['템플릿']) === original) auto.getRange(r._row, col).setValue(name);
+      });
+    }
     return { ok: true, name: name };
   } finally {
     lock.releaseLock();
@@ -807,7 +845,12 @@ function saveVariable(input) {
     if (dup && dup !== row) throw new Error('"' + name + '" 변수가 이미 있습니다.');
     if (row) s.getRange(row, 1, 1, 3).setValues([[name, value, note]]);
     else s.appendRow([name, value, note]);
-    return { ok: true, name: name };
+    var used = original !== name && listTemplates_().some(function (t) {
+      var found = false;
+      t.body.replace(/\{\{([^{}]+)\}\}/g, function (m, key) { if (key.trim() === original) found = true; return m; });
+      return found;
+    });
+    return { ok: true, name: name, note: used ? '변수 이름을 바꿨습니다. 템플릿의 {{' + original + '}}도 {{' + name + '}}으로 바꿔 주세요.' : '' };
   } finally {
     lock.releaseLock();
   }

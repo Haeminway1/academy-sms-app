@@ -90,6 +90,7 @@ main{margin-left:220px;padding:28px}
 </aside>
 <header id="topbar"><span class="academyName">학원 문자</span></header>
 <main>
+<div class="msg" id="syncMsg" role="status"></div>
 
 <section class="page" id="pg-att">
 <h2>오늘 출결</h2>
@@ -227,6 +228,9 @@ main{margin-left:220px;padding:28px}
 var app = null, attRows = [], attStatus = {}, picked = {}, pv = [], pvKey = '';
 var selTpl = null, tplDirty = false, autoDraft = null;
 var DAYS = '월화수목금토일';
+var saving = false, syncing = null, syncTimer = null, syncPending = false;
+var lockedControls = [], attRequest = 0, tplRequest = 0, smsRequest = 0;
+var mutationNames = /^(saveSettings|saveClass|deleteClass|saveStudent|deleteStudent|saveTemplate|deleteTemplate|saveVariable|deleteVariable|saveAutomation|deleteAutomation|setAutomationRunning|saveAttendance|sendMessages)$/;
 
 function $(i) { return document.getElementById(i); }
 function esc(s) {
@@ -236,7 +240,7 @@ function esc(s) {
 }
 function errText(e) { return (e && e.message) || String(e); }
 // google.script.run을 Promise로 감싼다. 부르는 함수명은 Code.gs 쪽과 맞춰야 한다.
-function call(fn) {
+function rpc(fn) {
   var a = [].slice.call(arguments, 1);
   return new Promise(function (resolve, reject) {
     var r = google.script.run
@@ -245,6 +249,141 @@ function call(fn) {
     r[fn].apply(r, a);
   });
 }
+function lockControls() {
+  document.querySelectorAll('button,select,input[type="checkbox"],input[type="date"]').forEach(function (el) {
+    if (lockedControls.some(function (x) { return x.el === el; })) return;
+    lockedControls.push({ el: el, disabled: el.disabled });
+    el.disabled = true;
+  });
+}
+function unlockControls() {
+  lockedControls.forEach(function (x) { x.el.disabled = x.disabled; });
+  lockedControls = [];
+}
+function setDisabled(el, disabled) {
+  var locked = lockedControls.filter(function (x) { return x.el === el; })[0];
+  if (locked) locked.disabled = disabled;
+  else el.disabled = disabled;
+}
+function call(fn) {
+  var args = [].slice.call(arguments, 1);
+  if (!mutationNames.test(fn)) return rpc.apply(null, [fn].concat(args));
+  if (saving) return Promise.reject(new Error('저장 중입니다. 잠시 기다려 주세요.'));
+  saving = true;
+  attRequest++; tplRequest++; smsRequest++;
+  clearTimeout(syncTimer);
+  lockControls();
+  var submitted = editorFor(fn, args[0]);
+  var before = submitted ? editorValues(submitted) : null;
+  var templateBefore = [$('tplName').value, $('tplBody').value, $('tplNote').value];
+  var ready = syncing || Promise.resolve();
+  function finish() {
+    saving = false;
+    unlockControls();
+    if (syncPending) requestSync();
+  }
+  return ready.catch(function () {}).then(function () {
+    submitted = editorFor(fn, args[0]) || submitted;
+    return rpc.apply(null, [fn].concat(args));
+  }).then(function (result) {
+    if (submitted) {
+      submitted._baseline = before;
+      if (args[0] && args[0].name) submitted._key = args[0].name;
+      if (/^delete/.test(fn)) submitted.remove();
+    }
+    if (fn === 'saveTemplate') {
+      selTpl = args[0].name;
+      tplDirty = JSON.stringify(templateBefore) !== JSON.stringify([$('tplName').value, $('tplBody').value, $('tplNote').value]);
+    }
+    if (fn === 'deleteTemplate' && selTpl === args[0]) { selTpl = ''; tplDirty = false; }
+    if (fn === 'saveAttendance') {
+      attRows.forEach(function (r) {
+        (args[1] || []).forEach(function (x) { if (r.name === x.name) r.status = x.status; });
+      });
+    }
+    if (fn === 'saveAutomation' && autoDraft && !autoDraft.row) autoDraft.row = result.row;
+    if (fn === 'deleteAutomation' && autoDraft) {
+      if (autoDraft.row === args[0]) { autoDraft = null; $('autoEdit').hidden = true; }
+      else if (autoDraft.row > args[0]) autoDraft.row--;
+    }
+    renameSelections(fn, args[0]);
+    return loadApp().catch(function (e) {
+      msg('syncMsg', '저장은 완료됐지만 새 자료를 읽지 못했습니다. 탭으로 돌아오면 다시 동기화합니다: ' + errText(e), true);
+    }).then(function () { return result; });
+  }).then(function (result) { finish(); return result; }, function (e) { finish(); throw e; });
+}
+function editorValues(card) {
+  return [].map.call(card.querySelectorAll('input,select,textarea,.days button'), function (el) {
+    return el.tagName === 'BUTTON' ? el.classList.contains('on') : el.type === 'checkbox' ? el.checked : el.value;
+  });
+}
+function trackEditor(card, kind, key) {
+  card.setAttribute('data-editor', kind);
+  card._key = key || '';
+  card._baseline = editorValues(card);
+  return card;
+}
+function editorFor(fn, input) {
+  var kind = fn.replace(/^(save|delete)/, '').toLowerCase();
+  var key = typeof input === 'string' ? input : (input && (input.originalName || input.name)) || '';
+  var found = null;
+  document.querySelectorAll('[data-editor]').forEach(function (card) {
+    if (card.getAttribute('data-editor') === kind && (kind === 'settings' || card._key === key || (!card._key && input && card.querySelector('input').value.trim() === input.name))) found = card;
+  });
+  return found;
+}
+function editorDrafts() {
+  var drafts = [];
+  document.querySelectorAll('[data-editor]').forEach(function (card) {
+    var values = editorValues(card), changes = {};
+    values.forEach(function (v, i) { if (v !== card._baseline[i]) changes[i] = v; });
+    if (!card._key || Object.keys(changes).length) drafts.push({ kind: card.getAttribute('data-editor'), key: card._key, changes: changes });
+  });
+  return drafts;
+}
+function restoreDrafts(drafts) {
+  var factories = { variable: varRow, class: clsRow, student: stuRow };
+  var lists = { variable: 'usrVarList', class: 'clsList', student: 'stuList' };
+  drafts.forEach(function (d) {
+    var card = null;
+    document.querySelectorAll('[data-editor]').forEach(function (el) {
+      if (el.getAttribute('data-editor') === d.kind && el._key === d.key) card = el;
+    });
+    if (!d.key && factories[d.kind]) {
+      card = factories[d.kind]({});
+      $(lists[d.kind]).appendChild(card);
+    }
+    if (!card) return;
+    var controls = card.querySelectorAll('input,select,textarea,.days button');
+    Object.keys(d.changes).forEach(function (i) {
+      var el = controls[i], value = d.changes[i];
+      if (!el) return;
+      if (el.tagName === 'BUTTON') el.classList.toggle('on', value);
+      else if (el.type === 'checkbox') el.checked = value;
+      else if (el.tagName !== 'SELECT' || [].some.call(el.options, function (o) { return o.value === value; })) el.value = value;
+    });
+  });
+}
+function renameSelections(fn, input) {
+  if (!input || !input.originalName || input.originalName === input.name) return;
+  var ids = fn === 'saveClass' ? ['attCls', 'smsCls', 'autoCls'] : fn === 'saveTemplate' ? ['smsTpl', 'autoTpl'] : fn === 'saveStudent' ? ['tplPvStu'] : [];
+  ids.forEach(function (id) {
+    var el = $(id);
+    [].forEach.call(el.options, function (o) { if (o.value === input.originalName) { o.value = input.name; o.textContent = input.name; } });
+  });
+  if (fn === 'saveStudent' && picked[input.originalName]) { picked[input.name] = true; delete picked[input.originalName]; }
+}
+function requestSync() {
+  syncPending = true;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(function () {
+    if (saving || document.hidden) return;
+    syncPending = false;
+    loadApp().catch(function (e) { msg('syncMsg', '동기화 실패: ' + errText(e), true); });
+  }, 300);
+}
+window.addEventListener('focus', requestSync);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) requestSync(); });
 function msg(id, t, err) { var e = $(id); e.textContent = t || ''; e.className = err ? 'msg err' : 'msg'; }
 function opt(v, t) { return '<option value="' + esc(v) + '">' + esc(t) + '</option>'; }
 function mkDays(val) {
@@ -272,8 +411,6 @@ function go(p) {
     b.classList.toggle('on', b.getAttribute('data-nav') === p);
   });
   $('more').hidden = true;
-  if (p === 'att') loadAtt();
-  if (p === 'log') loadLog();
   window.scrollTo(0, 0);
 }
 document.querySelectorAll('[data-nav]').forEach(function (b) {
@@ -282,9 +419,16 @@ document.querySelectorAll('[data-nav]').forEach(function (b) {
 $('moreBtn').onclick = function () { $('more').hidden = !$('more').hidden; };
 
 /* ----- 앱 자료 불러오기 ----- */
-function loadApp(done) {
-  call('getApp').then(function (a) {
+function loadApp() {
+  if (syncing) return syncing;
+  syncPending = false;
+  syncing = rpc('getApp').then(function (a) {
+    var drafts = editorDrafts();
+    var hadPreview = pv.length > 0;
+    msg('syncMsg', '');
     app = a; pv = []; pvKey = '';
+    $('smsPvList').innerHTML = '';
+    document.title = (a.academy || '학원 문자') + ' · 학원 문자';
     if (!$('attDate').value) $('attDate').value = a.today;
     document.querySelectorAll('.academyName').forEach(function (e) {
       e.textContent = a.academy || '학원 문자';
@@ -294,11 +438,14 @@ function loadApp(done) {
     renderTplList();
     if (!tplDirty) fillTplEditor(); else renderTplChips();
     renderVars(); renderAuto(); renderStu();
+    renderSettings();
+    restoreDrafts(drafts);
     $('autoRun').checked = !!a.automationRunning;
-    if (done) done();
-  }).catch(function (e) {
-    msg('attMsg', '불러오지 못했습니다: ' + errText(e), true);
+    if (saving) lockControls();
+    return Promise.all([loadAtt(true), loadLog(), runTplPv(), hadPreview ? refreshSmsPv() : Promise.resolve()]);
   });
+  syncing = syncing.then(function () { syncing = null; }, function (e) { syncing = null; throw e; });
+  return syncing;
 }
 function keepVal(sel, html) {
   var v = sel.value;
@@ -322,12 +469,18 @@ function fillSelects() {
 /* ----- 오늘 출결 ----- */
 function loadAtt(quiet) {
   if (!app) return;
+  var request = ++attRequest, date = $('attDate').value || app.today, cls = $('attCls').value;
   if (!quiet) msg('attMsg', '불러오는 중…');
-  call('getAttendance', $('attDate').value || app.today, $('attCls').value).then(function (list) {
+  return call('getAttendance', date, cls).then(function (list) {
+    if (request !== attRequest || date !== $('attDate').value || cls !== $('attCls').value) return;
+    var drafts = {};
+    if (quiet) attRows.forEach(function (r) { if (attStatus[r.name] !== (r.status || null)) drafts[r.name] = attStatus[r.name]; });
     attRows = list || []; attStatus = {};
     attRows.forEach(function (r) { attStatus[r.name] = r.status || null; });
+    Object.keys(drafts).forEach(function (name) { if (Object.prototype.hasOwnProperty.call(attStatus, name)) attStatus[name] = drafts[name]; });
     renderAtt();
-    msg('attMsg', attRows.length ? '' : '이 날짜에 수업이 있는 학생이 없습니다.');
+    if (saving) lockControls();
+    if (!quiet) msg('attMsg', attRows.length ? '' : '이 날짜에 수업이 있는 학생이 없습니다.');
   }).catch(function (e) { msg('attMsg', errText(e), true); });
 }
 function renderAtt() {
@@ -358,10 +511,7 @@ $('attSave').onclick = function () {
     return { name: r.name, status: attStatus[r.name] };
   });
   if (!recs.length) { msg('attMsg', '등원·지각·결석 표시가 없습니다.', true); return; }
-  var btn = this;
-  btn.disabled = true;
   call('saveAttendance', $('attDate').value || app.today, recs).then(function (r) {
-    btn.disabled = false;
     var list = (r && r.sent) || [];
     msg('attMsg', '저장 완료 — ' + (list.length ? '자동 문자 ' + list.length + '건 처리' : '자동 문자 없음') +
       (r && r.note ? ' · ' + r.note : ''));
@@ -369,8 +519,7 @@ $('attSave').onclick = function () {
     $('attSentList').innerHTML = list.map(function (x) {
       return '<div class="line"><b>' + esc(x.name) + '</b> · ' + esc(x.template) + ' → ' + esc(x.result) + '</div>';
     }).join('');
-    loadAtt(true);
-  }).catch(function (e) { btn.disabled = false; msg('attMsg', errText(e), true); });
+  }).catch(function (e) { msg('attMsg', errText(e), true); });
 };
 $('attDate').onchange = function () { loadAtt(); };
 $('attCls').onchange = function () { loadAtt(); };
@@ -428,20 +577,28 @@ function renderSmsPv() {
     g.appendChild(card);
   });
 }
+function refreshSmsPv() {
+  var request = ++smsRequest, tpl = $('smsTpl').value, names = smsNames();
+  pvKey = '';
+  if (!tpl || !names.length) { pv = []; renderSmsPv(); return Promise.resolve(); }
+  return call('previewMessages', tpl, names).then(function (list) {
+    if (request !== smsRequest || tpl !== $('smsTpl').value || names.join('|') !== smsNames().join('|')) return;
+    pv = list || [];
+    pvKey = tpl + '|' + names.join('|');
+    renderSmsPv();
+  });
+}
 $('smsPv').onclick = function () {
   var tpl = $('smsTpl').value, names = smsNames();
   if (!tpl) { msg('smsMsg', '템플릿 페이지에서 템플릿을 먼저 만드세요.', true); return; }
   if (!names.length) { msg('smsMsg', '받을 학생을 골라 주세요.', true); return; }
   var btn = this;
-  btn.disabled = true;
-  call('previewMessages', tpl, names).then(function (list) {
-    btn.disabled = false;
-    pv = list || [];
-    pvKey = tpl + '|' + names.join('|');
-    renderSmsPv();
+  setDisabled(btn, true);
+  refreshSmsPv().then(function () {
+    setDisabled(btn, false);
     $('smsDone').hidden = true;
     msg('smsMsg', '미리보기 ' + pv.length + '건 — 내용을 확인한 뒤 보내세요.');
-  }).catch(function (e) { btn.disabled = false; msg('smsMsg', errText(e), true); });
+  }).catch(function (e) { setDisabled(btn, false); msg('smsMsg', errText(e), true); });
 };
 $('smsSend').onclick = function () {
   var tpl = $('smsTpl').value, names = smsNames();
@@ -452,19 +609,14 @@ $('smsSend').onclick = function () {
   var skip = pv.filter(function (p) { return p.duplicate || (p.missing && p.missing.length); }).length;
   var n = pv.length - skip;
   if (!window.confirm('총 ' + pv.length + '건 중 ' + n + '건을 보낼까요?' + (skip ? ' (중복·보류 ' + skip + '건 건너뜀)' : ''))) return;
-  var btn = this;
-  btn.disabled = true;
   call('sendMessages', tpl, names).then(function (list) {
-    btn.disabled = false;
     list = list || [];
     $('smsDone').hidden = !list.length;
     $('smsDoneList').innerHTML = list.map(function (x) {
       return '<div class="line"><b>' + esc(x.name) + '</b> → ' + esc(x.result) + '</div>';
     }).join('');
     msg('smsMsg', '보내기 완료 — ' + list.length + '건 처리했습니다.');
-    pv = []; pvKey = '';
-    $('smsPvList').innerHTML = '';
-  }).catch(function (e) { btn.disabled = false; msg('smsMsg', errText(e), true); });
+  }).catch(function (e) { msg('smsMsg', errText(e), true); });
 };
 
 /* ----- 템플릿 ----- */
@@ -476,7 +628,7 @@ function renderTplList() {
     c.className = 'card' + (selTpl === t.name ? ' on' : '');
     c.innerHTML = '<b>' + esc(t.name) + '</b><div class="meta">' +
       esc(t.note || (t.body || '').slice(0, 40)) + '</div>';
-    c.onclick = function () { selTpl = t.name; fillTplEditor(); renderTplList(); };
+    c.onclick = function () { if (saving) return; selTpl = t.name; fillTplEditor(); renderTplList(); };
     g.appendChild(c);
   });
 }
@@ -486,7 +638,7 @@ function fillTplEditor() {
   $('tplName').value = t ? t.name : '';
   $('tplNote').value = t ? t.note : '';
   $('tplBody').value = t ? t.body : '';
-  $('tplDel').disabled = !t;
+  setDisabled($('tplDel'), !t);
   tplDirty = false;
   renderTplChips();
   scheduleTplPv();
@@ -527,9 +679,11 @@ function insertVar(n) {
 var tplPvT = null;
 function scheduleTplPv() { clearTimeout(tplPvT); tplPvT = setTimeout(runTplPv, 300); }
 function runTplPv() {
-  var body = $('tplBody').value, card = $('tplPvCard');
+  clearTimeout(tplPvT);
+  var request = ++tplRequest, body = $('tplBody').value, student = $('tplPvStu').value, card = $('tplPvCard');
   if (!body.trim()) { card.innerHTML = '<span class="meta">내용을 적으면 미리보기가 나옵니다.</span>'; return; }
-  call('previewTemplate', body, $('tplPvStu').value || null).then(function (r) {
+  return call('previewTemplate', body, student || null).then(function (r) {
+    if (request !== tplRequest || body !== $('tplBody').value || student !== $('tplPvStu').value) return;
     var html = '<div class="body-text">' + esc(r.text) + '</div>' +
       '<span class="badge">' + r.bytes + 'B</span>' +
       '<span class="badge ' + (r.type === 'LMS' ? 'b-lms' : 'b-sms') + '">' + esc(r.type) + '</span>';
@@ -539,7 +693,7 @@ function runTplPv() {
       }).join(' ') + ' — 값이 없으면 자동 발송은 보류됩니다</div>';
     }
     card.innerHTML = html;
-  }).catch(function (e) { card.innerHTML = '<span class="err">' + esc(errText(e)) + '</span>'; });
+  }).catch(function (e) { if (request === tplRequest) card.innerHTML = '<span class="err">' + esc(errText(e)) + '</span>'; });
 }
 $('tplBody').addEventListener('input', function () { tplDirty = true; scheduleTplPv(); });
 $('tplName').addEventListener('input', function () { tplDirty = true; });
@@ -549,17 +703,15 @@ $('tplNew').onclick = function () { selTpl = ''; fillTplEditor(); renderTplList(
 $('tplSave').onclick = function () {
   var name = $('tplName').value.trim(), body = $('tplBody').value;
   if (!name) { msg('tplMsg', '이름을 적어 주세요.', true); return; }
-  var btn = this;
-  btn.disabled = true;
   call('saveTemplate', { name: name, body: body, note: $('tplNote').value, originalName: selTpl || null })
-    .then(function () { btn.disabled = false; selTpl = name; tplDirty = false; msg('tplMsg', '저장했습니다.'); loadApp(); })
-    .catch(function (e) { btn.disabled = false; msg('tplMsg', errText(e), true); });
+    .then(function () { msg('tplMsg', '저장했습니다.'); })
+    .catch(function (e) { msg('tplMsg', errText(e), true); });
 };
 $('tplDel').onclick = function () {
   if (!selTpl) return;
   if (!window.confirm('템플릿 「' + selTpl + '」을 지울까요?')) return;
   call('deleteTemplate', selTpl)
-    .then(function () { selTpl = ''; loadApp(); })
+    .then(function () { msg('tplMsg', '삭제했습니다.'); })
     .catch(function (e) { msg('tplMsg', errText(e), true); });
 };
 
@@ -600,18 +752,18 @@ function varRow(v) {
       value: card.querySelector('.vval').value,
       note: card.querySelector('.vnote').value,
       originalName: v.name || null
-    }).then(function () { msg('varMsg', '저장했습니다.'); loadApp(); })
+    }).then(function (r) { msg('varMsg', r.note || '저장했습니다.'); })
       .catch(function (e) { msg('varMsg', errText(e), true); });
   };
   dl.onclick = function () {
     if (!v.name) { card.remove(); return; }
     if (!window.confirm('변수 「' + v.name + '」을 지울까요?')) return;
-    call('deleteVariable', v.name).then(function () { loadApp(); })
+    call('deleteVariable', v.name)
       .catch(function (e) { msg('varMsg', errText(e), true); });
   };
   bar.appendChild(sv); bar.appendChild(dl);
   card.appendChild(bar);
-  return card;
+  return trackEditor(card, 'variable', v.name);
 }
 $('varAdd').onclick = function () { $('usrVarList').appendChild(varRow({})); };
 
@@ -635,7 +787,7 @@ function renderAuto() {
       call('saveAutomation', {
         row: a.row, on: tog.checked, type: a.type, minutes: a.minutes,
         time: a.time, days: a.days, cls: a.cls, template: a.template
-      }).then(function () { loadApp(); })
+      })
         .catch(function (e) { tog.checked = !tog.checked; msg('autoMsg', errText(e), true); });
     };
     var txt = document.createElement('div');
@@ -651,7 +803,7 @@ function renderAuto() {
     del.style.minHeight = '36px';
     del.onclick = function () {
       if (!window.confirm('이 규칙을 지울까요?')) return;
-      call('deleteAutomation', a.row).then(function () { loadApp(); })
+      call('deleteAutomation', a.row)
         .catch(function (e) { msg('autoMsg', errText(e), true); });
     };
     top.appendChild(tog); top.appendChild(txt); top.appendChild(ed); top.appendChild(del);
@@ -694,8 +846,7 @@ $('autoSave').onclick = function () {
   };
   if (a.type === '시작 후 미출석') a.minutes = parseInt($('autoMinutes').value, 10);
   if (a.type === '예약 발송') { a.time = $('autoTime').value; a.days = daysVal($('autoDays')); }
-  $('autoEdit').hidden = true;
-  call('saveAutomation', a).then(function () { msg('autoMsg', '저장했습니다.'); loadApp(); })
+  call('saveAutomation', a).then(function () { $('autoEdit').hidden = true; msg('autoMsg', '저장했습니다.'); })
     .catch(function (e) { msg('autoMsg', errText(e), true); });
 };
 $('autoCancel').onclick = function () { $('autoEdit').hidden = true; };
@@ -738,18 +889,18 @@ function clsRow(c) {
     call('saveClass', {
       name: name, days: daysVal(days),
       start: card.querySelector('.cstart').value, originalName: c.name || null
-    }).then(function () { msg('stuMsg', '저장했습니다.'); loadApp(); })
+    }).then(function () { msg('stuMsg', '저장했습니다.'); })
       .catch(function (e) { msg('stuMsg', errText(e), true); });
   };
   dl.onclick = function () {
     if (!c.name) { card.remove(); return; }
     if (!window.confirm('반 「' + c.name + '」을 지울까요?')) return;
-    call('deleteClass', c.name).then(function () { loadApp(); })
+    call('deleteClass', c.name)
       .catch(function (e) { msg('stuMsg', errText(e), true); });
   };
   bar.appendChild(sv); bar.appendChild(dl);
   card.appendChild(bar);
-  return card;
+  return trackEditor(card, 'class', c.name);
 }
 function stuRow(st) {
   var card = document.createElement('div');
@@ -780,18 +931,18 @@ function stuRow(st) {
     call('saveStudent', {
       name: name, cls: card.querySelector('.scls').value,
       phone: card.querySelector('.sphone').value, fields: fields, originalName: st.name || null
-    }).then(function () { msg('stuMsg', '저장했습니다.'); loadApp(); })
+    }).then(function () { msg('stuMsg', '저장했습니다.'); })
       .catch(function (e) { msg('stuMsg', errText(e), true); });
   };
   dl.onclick = function () {
     if (!st.name) { card.remove(); return; }
     if (!window.confirm('학생 ' + st.name + '을 지울까요?')) return;
-    call('deleteStudent', st.name).then(function () { loadApp(); })
+    call('deleteStudent', st.name)
       .catch(function (e) { msg('stuMsg', errText(e), true); });
   };
   bar.appendChild(sv); bar.appendChild(dl);
   card.appendChild(bar);
-  return card;
+  return trackEditor(card, 'student', st.name);
 }
 $('clsAdd').onclick = function () { $('clsList').appendChild(clsRow({})); };
 $('stuAdd').onclick = function () { $('stuList').appendChild(stuRow({ fields: {} })); };
@@ -799,7 +950,7 @@ $('stuAdd').onclick = function () { $('stuList').appendChild(stuRow({ fields: {}
 /* ----- 발송기록·설정 ----- */
 function loadLog() {
   if (!app) return;
-  call('getLog', 100).then(function (list) {
+  return call('getLog', 100).then(function (list) {
     list = list || [];
     $('logList').innerHTML = list.length ? list.map(function (x) {
       return '<div class="line"><span class="meta">' + esc(x.at || '') + '</span> <b>' + esc(x.name) + '</b> ' +
@@ -810,17 +961,20 @@ function loadLog() {
   }).catch(function (e) {
     $('logList').innerHTML = '<span class="err">' + esc(errText(e)) + '</span>';
   });
+}
+function renderSettings() {
   $('setAcademy').value = app.settings.academy || '';
   $('setSender').value = app.settings.sender || '';
   $('setSolapi').checked = !!app.settings.solapiOn;
   $('setKeys').textContent = app.settings.keysSet
     ? 'SOLAPI 키가 저장되어 있습니다.'
     : '키가 없습니다 — Apps Script 프로젝트 설정 → 스크립트 속성에 SOLAPI_KEY·SOLAPI_SECRET을 넣으세요.';
+  trackEditor($('setSave').parentElement, 'settings', 'settings');
 }
 $('setSave').onclick = function () {
   call('saveSettings', {
     academy: $('setAcademy').value, sender: $('setSender').value, solapiOn: $('setSolapi').checked
-  }).then(function () { msg('logMsg', '저장했습니다.'); loadApp(); })
+  }).then(function () { msg('logMsg', '저장했습니다.'); })
     .catch(function (e) { msg('logMsg', errText(e), true); });
 };
 
@@ -837,7 +991,7 @@ if (typeof google === 'undefined' || !google.script || !google.script.run) {
   document.querySelector('main').insertAdjacentHTML('afterbegin',
     '<div class="card err">앱스 스크립트 웹앱 주소로 열어야 움직입니다.</div>');
 } else {
-  loadApp(function () { loadAtt(); });
+  loadApp().catch(function (e) { msg('attMsg', '불러오지 못했습니다: ' + errText(e), true); });
 }
 </script>
 </body>

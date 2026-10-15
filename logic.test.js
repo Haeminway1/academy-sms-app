@@ -339,3 +339,304 @@ test('ruleKey: 행 번호가 아니라 규칙 내용으로 정해진다', () => 
   assert.equal(ruleKey(a), ruleKey({ ...a, row: 2 }));
   assert.notEqual(ruleKey(a), ruleKey({ ...a, minutes: 15 }));
 });
+
+function gasApp() {
+  const tabs = {
+    '설정': [['항목', '값'], ['학원명', '첫 이름'], ['학원명', '옛 이름'], ['발신번호', '01011112222'], ['SOLAPI 사용', '아니오']],
+    '반': [['반', '요일', '시작'], ['A', '', '16:00']],
+    '학생': [['이름', '반', '학부모번호'], ['홍길동', 'A', '01012345678']],
+    '출결': [['날짜', '이름', '반', '상태', '시각']],
+    '템플릿': [['이름', '내용', '메모'], ['결석', '[{{학원명}}] {{이름}} {{상태}}', '']],
+    '변수': [['이름', '값', '메모'], ['공지', '안내', '']],
+    '자동화': [['켜기', '종류', '분', '시각', '요일', '반', '템플릿'], ['예', '결석 저장 즉시', '', '', '', '', '결석']],
+    '발송기록': [['시각', '이름', '번호', '템플릿', '내용', '결과', '키']]
+  };
+  function sheet(name) {
+    const data = tabs[name];
+    return {
+      getDataRange: () => ({ getValues: () => data.map(row => row.slice()) }),
+      getLastRow: () => data.length,
+      getLastColumn: () => data[0].length,
+      appendRow: row => data.push(row.slice()),
+      deleteRow: row => data.splice(row - 1, 1),
+      getRange: (row, col, height = 1, width = 1) => ({
+        getValues: () => Array.from({ length: height }, (_, i) =>
+          Array.from({ length: width }, (_, j) => data[row - 1 + i]?.[col - 1 + j] ?? '')),
+        setValue: value => { data[row - 1][col - 1] = value; },
+        setValues: values => values.forEach((cells, i) => cells.forEach((value, j) => {
+          data[row - 1 + i][col - 1 + j] = value;
+        }))
+      })
+    };
+  }
+  const code = readFileSync(new URL('./Code.gs', import.meta.url), 'utf8');
+  const api = new Function('SpreadsheetApp', 'PropertiesService', 'LockService', 'Session', 'Utilities', 'ScriptApp',
+    src + '\n' + code + '\nreturn {getApp, saveSettings, saveAttendance, getAttendance, saveClass, saveTemplate, saveVariable, previewTemplate};')(
+    { getActiveSpreadsheet: () => ({ getSheetByName: sheet }) },
+    { getScriptProperties: () => ({ getProperty: () => null }) },
+    { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    { getScriptTimeZone: () => 'Asia/Seoul' },
+    { formatDate: (_date, _tz, format) => format === 'HH:mm' ? '16:05' : '2026-10-15' },
+    { getProjectTriggers: () => [] }
+  );
+  return { api, tabs };
+}
+
+test('GAS: 중복 설정 행도 저장 후 getApp·학원명 미리보기에 즉시 반영, 재저장 불변', () => {
+  const { api, tabs } = gasApp();
+  const settings = { academy: '새 학원', sender: '01011112222', solapiOn: false };
+  api.saveSettings(settings);
+  assert.equal(api.getApp().academy, '새 학원');
+  assert.equal(api.getApp().settings.academy, '새 학원');
+  assert.equal(api.previewTemplate('{{학원명}}', '홍길동').text, '새 학원');
+  assert.equal(tabs['설정'].filter(row => row[0] === '학원명').length, 1);
+  const saved = JSON.stringify(tabs);
+  api.saveSettings(settings);
+  assert.equal(JSON.stringify(tabs), saved);
+});
+
+test('GAS: 날짜+학생 출결 upsert, 결석→등원, 자동 문자 중복 방지', () => {
+  const { api, tabs } = gasApp();
+  const save = status => api.saveAttendance('2026-10-15', [{ name: '홍길동', status }]);
+  assert.equal(save('결석').sent[0].result, '시험(미발송)');
+  assert.equal(save('결석').sent[0].result, '중복 건너뜀');
+  save('등원');
+  assert.equal(tabs['출결'].length, 2);
+  assert.equal(api.getAttendance('2026-10-15', '')[0].status, '등원');
+  assert.equal(tabs['발송기록'].length, 2);
+  api.saveAttendance('2026-10-14', '홍길동', '결석');
+  assert.equal(tabs['출결'].length, 3);
+  assert.equal(tabs['발송기록'].length, 2);
+});
+
+test('GAS: 기존 출결 중복도 해당 날짜·학생만 정리, 잘못된 묶음은 쓰기 전 거절', () => {
+  const { api, tabs } = gasApp();
+  tabs['출결'].push(['2026-10-14', '홍길동', 'A', '결석', '16:00'],
+    ['2026-10-15', '홍길동', 'A', '결석', '16:01'],
+    ['2026-10-15', '홍길동', 'A', '지각', '16:02']);
+  api.saveAttendance('2026-10-15', [{ name: '홍길동', status: '등원' }, { name: '홍길동', status: '지각' }]);
+  assert.equal(tabs['출결'].length, 3);
+  assert.equal(api.getAttendance('2026-10-15', '')[0].status, '지각');
+  assert.equal(tabs['출결'][1][3], '결석');
+  const before = JSON.stringify(tabs);
+  assert.throws(() => api.saveAttendance('2026-10-15', [
+    { name: '홍길동', status: '등원' }, { name: '없는 학생', status: '결석' }
+  ]), /없는 학생/);
+  assert.equal(JSON.stringify(tabs), before);
+});
+
+test('GAS: 설정 열 위치가 바뀌어도 항목·값 머리글에 맞춰 저장한다', () => {
+  const { api, tabs } = gasApp();
+  tabs['설정'].forEach(row => row.reverse());
+  api.saveSettings({ academy: '열 바꾼 학원', sender: '010', solapiOn: false });
+  assert.equal(api.getApp().academy, '열 바꾼 학원');
+  assert.equal(tabs['설정'].length, 4);
+});
+
+test('GAS: 반·템플릿 재저장 불변, 이름 변경의 참조 전파와 변수 경고', () => {
+  const { api, tabs } = gasApp();
+  const cls = { name: 'B', originalName: 'A', days: '', start: '16:00' };
+  api.saveClass(cls);
+  assert.equal(api.getApp().students[0].cls, 'B');
+  const tpl = { name: '새 결석', originalName: '결석', body: '{{ 공지 }}', note: '' };
+  api.saveTemplate(tpl);
+  assert.equal(api.getApp().automations[0].template, '새 결석');
+  const saved = JSON.stringify(tabs);
+  api.saveClass(cls);
+  api.saveTemplate(tpl);
+  api.saveClass({ ...cls, originalName: 'B' });
+  api.saveTemplate({ ...tpl, originalName: '새 결석' });
+  assert.equal(JSON.stringify(tabs), saved);
+  assert.match(api.saveVariable({ name: '새 공지', originalName: '공지', value: '안내' }).note, /공지/);
+});
+
+function previewApi() {
+  const html = readFileSync(new URL('./preview.html', import.meta.url), 'utf8');
+  const script = html.match(/<script id="gasStub">([\s\S]*?)<\/script>/)[1];
+  const win = {};
+  new Function('window', 'setTimeout', script)(win, queueMicrotask);
+  return (fn, ...args) => new Promise((resolve, reject) => {
+    win.google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args);
+  });
+}
+
+test('데모 API: 설정·템플릿·반 재저장과 이름 변경, 변수 경고', async () => {
+  const call = previewApi();
+  const settings = { academy: '  새 학원  ', sender: '01011112222', solapiOn: false };
+  await call('saveSettings', settings);
+  await call('saveSettings', settings);
+  assert.equal((await call('getApp')).academy, '새 학원');
+  assert.equal((await call('previewTemplate', '{{학원명}}', '홍길동')).text, '새 학원');
+  const cls = { name: '새 반', originalName: '중2A', days: '', start: '16:00' };
+  const tpl = { name: '새 결석', originalName: '결석 안내', body: '{{ 학원전화 }}', note: '' };
+  await call('saveClass', cls);
+  await call('saveTemplate', tpl);
+  const before = await call('getApp');
+  await call('saveClass', cls);
+  await call('saveTemplate', tpl);
+  assert.deepEqual(await call('getApp'), before);
+  assert.equal(before.students[0].cls, '새 반');
+  assert.equal(before.automations[0].template, '새 결석');
+  assert.match((await call('saveVariable', { name: '새 전화', originalName: '학원전화', value: '02' })).note, /학원전화/);
+});
+
+test('데모 API: 출결 upsert·지난 날짜·트리거 꺼짐·수동/자동 별도 중복 키', async () => {
+  const call = previewApi();
+  const { today } = await call('getApp');
+  await call('saveClass', { name: '중2A', days: '', start: '16:00' });
+  await call('setAutomationRunning', false);
+  const save = status => call('saveAttendance', today, [{ name: '홍길동', status }]);
+  assert.equal((await save('결석')).sent[0].result, '시험(미발송)');
+  assert.equal((await save('결석')).sent[0].result, '중복 건너뜀');
+  await save('등원');
+  assert.equal((await call('getAttendance', today, '중2A'))[0].status, '등원');
+  const manual = await call('sendMessages', '결석 안내', ['홍길동']);
+  assert.equal(manual[0].result, '시험(미발송)');
+  assert.equal((await call('sendMessages', '결석 안내', ['홍길동']))[0].result, '중복 건너뜀');
+  const past = await call('saveAttendance', '2000-01-01', '홍길동', '결석');
+  assert.deepEqual(past.sent, []);
+  assert.match(past.note, /지난 날짜/);
+});
+
+function syncClient() {
+  const script = readFileSync(new URL('./Index.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+  const nodes = {}, handlers = {}, timers = new Map(), calls = [], views = [];
+  function node(id) {
+    if (!nodes[id]) nodes[id] = {
+      value: '', checked: false, disabled: false, hidden: false, textContent: '', tagName: 'INPUT',
+      setAttribute(key, value) { this[key] = value; },
+      getAttribute(key) { return this[key]; },
+      querySelectorAll() { return []; },
+      classList: { toggle() {} }
+    };
+    return nodes[id];
+  }
+  const card = node('settingsCard');
+  const controls = ['setAcademy', 'setSender', 'setSolapi'].map(node);
+  node('setSolapi').type = 'checkbox';
+  node('setSave').parentElement = card;
+  card.querySelectorAll = () => controls;
+  const names = [node('sideName'), node('topName')];
+  const doc = {
+    hidden: false, title: '', getElementById: node,
+    querySelectorAll(selector) {
+      if (selector === '.academyName') return names;
+      if (selector === '[data-editor]') return card['data-editor'] ? [card] : [];
+      return [node('setSave'), node('tplDel'), node('autoRun')];
+    },
+    addEventListener: (name, fn) => { handlers[name] = fn; }
+  };
+  const state = {
+    academy: '처음 학원', today: '2026-10-15', templates: [{ name: '안내', body: '{{학원명}}' }],
+    settings: { academy: '처음 학원', sender: '010', solapiOn: false }, automationRunning: false
+  };
+  let fail = '', release;
+  const server = fn => {
+    calls.push(fn);
+    if (fn === fail) return Promise.reject(new Error('실패 예시'));
+    if (fn === 'getApp') return Promise.resolve(structuredClone(state));
+    return new Promise(resolve => { release = () => resolve({ ok: true, row: 2 }); });
+  };
+  const start = script.slice(0, script.indexOf('/* ----- 페이지 이동 ----- */'));
+  const load = script.slice(script.indexOf('function loadApp()'), script.indexOf('function keepVal('));
+  const settings = script.slice(script.indexOf('function renderSettings()'), script.indexOf("$('setSave').onclick"));
+  const client = new Function('document', 'window', 'setTimeout', 'clearTimeout', 'server', 'views', start + load + settings + `
+    rpc = server;
+    function fillSelects() { views.push('selects'); }
+    function renderTplList() { views.push('templates'); }
+    function fillTplEditor() { views.push('editor'); }
+    function renderTplChips() { views.push('chips'); }
+    function renderVars() { views.push('variables'); }
+    function renderAuto() { views.push('automations'); }
+    function renderStu() { views.push('students'); }
+    function loadAtt() { views.push('attendance'); return Promise.resolve(); }
+    function loadLog() { views.push('log'); return Promise.resolve(); }
+    function runTplPv() { views.push('template-preview'); return Promise.resolve(); }
+    function refreshSmsPv() { views.push('message-preview'); return Promise.resolve(); }
+    function varRow() {} function clsRow() {} function stuRow() {}
+    return { call: call, loadApp: loadApp, dirtyTemplate: function () { tplDirty = true; },
+      showPreview: function () { pv = [{}]; }, busy: function () { return saving; } };
+  `)(doc, { addEventListener: (name, fn) => { handlers[name] = fn; } },
+    fn => { const id = {}; timers.set(id, fn); return id; }, id => timers.delete(id), server, views);
+  return { client, state, node, names, calls, views, doc, handlers,
+    fail: name => { fail = name; }, release: () => release(),
+    flush: () => { const jobs = [...timers.values()]; timers.clear(); jobs.forEach(fn => fn()); } };
+}
+
+test('화면 동기화: 모든 변경 성공마다 getApp 1회, 전체 의존 화면 갱신·버튼 복구', async () => {
+  const f = syncClient();
+  await f.client.loadApp();
+  f.client.showPreview();
+  const mutations = ['saveSettings', 'saveClass', 'deleteClass', 'saveStudent', 'deleteStudent',
+    'saveTemplate', 'deleteTemplate', 'saveVariable', 'deleteVariable', 'saveAutomation',
+    'deleteAutomation', 'setAutomationRunning', 'saveAttendance', 'sendMessages'];
+  for (const fn of mutations) {
+    const count = f.calls.filter(x => x === 'getApp').length;
+    f.views.length = 0;
+    f.client.showPreview();
+    const pending = f.client.call(fn, { name: '안내' }, []);
+    assert.equal(f.node('setSave').disabled, true, fn);
+    await Promise.resolve();
+    await Promise.resolve();
+    f.release();
+    await pending;
+    assert.equal(f.calls.filter(x => x === 'getApp').length, count + 1, fn);
+    for (const view of ['selects', 'templates', 'variables', 'automations', 'students', 'attendance', 'log', 'template-preview', 'message-preview']) {
+      assert.ok(f.views.includes(view), fn + ': ' + view);
+    }
+    assert.equal(f.node('setSave').disabled, false, fn);
+    assert.equal(f.client.busy(), false, fn);
+  }
+});
+
+test('화면 동기화: 학원명·제목·설정 갱신, 미저장 텍스트 보존, 포커스 debounce와 저장 중 제외', async () => {
+  const f = syncClient();
+  await f.client.loadApp();
+  f.node('setSender').value = '미저장 번호';
+  f.node('tplBody').value = '작성 중 {{학원명}}';
+  f.client.dirtyTemplate();
+  f.state.academy = f.state.settings.academy = '시트에서 바꾼 학원';
+  f.handlers.focus(); f.handlers.visibilitychange(); f.handlers.focus();
+  f.flush();
+  await f.client.loadApp();
+  assert.equal(f.doc.title, '시트에서 바꾼 학원 · 학원 문자');
+  assert.equal(f.names[0].textContent, '시트에서 바꾼 학원');
+  assert.equal(f.names[1].textContent, '시트에서 바꾼 학원');
+  assert.equal(f.node('setAcademy').value, '시트에서 바꾼 학원');
+  assert.equal(f.node('setSender').value, '미저장 번호');
+  assert.equal(f.node('tplBody').value, '작성 중 {{학원명}}');
+  assert.equal(f.calls.filter(x => x === 'getApp').length, 2);
+  const pending = f.client.call('saveClass', { name: 'A' });
+  const double = f.client.call('saveClass', { name: 'A' });
+  await assert.rejects(double, /저장 중/);
+  f.handlers.focus(); f.flush();
+  assert.equal(f.calls.filter(x => x === 'getApp').length, 2);
+  await Promise.resolve(); await Promise.resolve();
+  f.release(); await pending;
+  f.flush();
+  assert.equal(f.calls.filter(x => x === 'getApp').length, 3);
+  f.fail('saveSettings');
+  await assert.rejects(f.client.call('saveSettings', {}), /실패 예시/);
+  assert.equal(f.node('setSave').disabled, false);
+  assert.equal(f.client.busy(), false);
+});
+
+test('화면 동기화: 재조회 실패도 저장 결과·버튼을 복구하고, 숨긴 탭은 복귀 후 한 번 읽는다', async () => {
+  const f = syncClient();
+  await f.client.loadApp();
+  f.doc.hidden = true;
+  f.handlers.focus(); f.flush();
+  assert.equal(f.calls.filter(x => x === 'getApp').length, 1);
+  f.doc.hidden = false;
+  f.handlers.visibilitychange(); f.flush();
+  await f.client.loadApp();
+  assert.equal(f.calls.filter(x => x === 'getApp').length, 2);
+  f.fail('getApp');
+  const pending = f.client.call('saveClass', { name: 'A' });
+  await Promise.resolve(); await Promise.resolve();
+  f.release();
+  assert.equal((await pending).ok, true);
+  assert.match(f.node('syncMsg').textContent, /저장은 완료/);
+  assert.equal(f.node('setSave').disabled, false);
+  assert.equal(f.client.busy(), false);
+});

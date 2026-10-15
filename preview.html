@@ -64,8 +64,7 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
   var automationRunning = true;
   var settings = { academy: '해민 영어학원', sender: '01011112222', solapiOn: false, keysSet: false };
   var att = {};            // att[dateStr][name] = '등원'|'지각'|'결석'
-  var sentKeys = {};       // '학생|템플릿' -> true (중복 건너뜀)
-  sentKeys['홍길동|결석 안내'] = 1;
+  var sentKeys = {};
   var log = [];
 
   function find(name) {
@@ -124,8 +123,8 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
     var s = find(name) || { phone: '' };
     log.unshift({ at: today + ' ' + now, name: name, phoneMasked: mask(s.phone), template: template, text: text, result: result });
   }
-  function autoSend(s, template, dateStr) {
-    var key = s.name + '|' + template;
+  function autoSend(s, template, dateStr, rule) {
+    var key = dateStr + '|' + s.name + '|' + template + '|자동화 ' + [rule.type, rule.cls || '', rule.minutes || '', rule.time || '', rule.days || ''].join('|');
     if (sentKeys[key]) return { name: s.name, template: template, result: '중복 건너뜀' };
     var f = fill(tplBody(template), varsOf(s, dateStr));
     var result = '시험(미발송)';
@@ -166,39 +165,47 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
       return students.filter(function (s) {
         if (cls && s.cls !== cls) return false;
         var c = findCls(s.cls);
-        return !c || c.days.indexOf(wd) > -1;
+        return !c || !c.days || c.days.indexOf(wd) > -1;
       }).map(function (s) {
         var c = findCls(s.cls);
         return { name: s.name, cls: s.cls, start: c ? c.start : '', status: dayAtt[s.name] || null, at: dayAtt[s.name] ? ds + ' ' + now : '' };
       });
     },
-    saveAttendance: function (dateStr, records) {
+    saveAttendance: function (dateStr, records, status) {
       var ds = dateStr || today;
+      if (typeof records === 'string') records = [{ name: records, status: status }];
+      if (!records || !records.length) throw new Error('저장할 출결이 없습니다.');
+      records.forEach(function (r) {
+        if (!find(r.name)) throw new Error('학생을 찾지 못했습니다.');
+        if (['등원', '지각', '결석'].indexOf(r.status) < 0) throw new Error('상태(등원·지각·결석)를 골라 주세요.');
+      });
       if (!att[ds]) att[ds] = {};
       var sent = [];
       (records || []).forEach(function (r) {
         var s = find(r.name);
         if (!s) return;
         att[ds][r.name] = r.status;
-        if (!automationRunning) return;
+        if (ds !== today) return;
         automations.forEach(function (a) {
           if (!a.on) return;
           if (a.cls && s.cls !== a.cls) return;
           if ((a.type === '결석 저장 즉시' && r.status === '결석') ||
               (a.type === '지각 저장 즉시' && r.status === '지각')) {
-            sent.push(autoSend(s, a.template, ds));
+            if (templates.some(function (t) { return t.name === a.template; })) sent.push(autoSend(s, a.template, ds, a));
           }
         });
       });
-      return { ok: true, sent: sent, note: automationRunning ? '' : '자동 발송 꺼짐' };
+      return { ok: true, sent: sent, note: ds === today ? '' : '지난 날짜는 자동 문자를 보내지 않습니다' };
     },
     saveClass: function (c) {
       if (!c || !c.name) throw new Error('반 이름이 없습니다.');
       var orig = c.originalName || c.name, cur = null;
       classes.forEach(function (x) { if (x.name === orig) cur = x; });
-      if (!cur && c.originalName) throw new Error('반을 찾지 못했습니다.');
-      if (!cur) { cur = {}; classes.push(cur); }
+      if (!cur && c.originalName) classes.forEach(function (x) {
+        if (x.name === c.name && x.days === (c.days || '') && x.start === (c.start || '')) { cur = x; orig = c.name; }
+      });
       dup(classes, c.name, orig);
+      if (!cur) { cur = {}; classes.push(cur); }
       cur.name = c.name; cur.days = c.days || ''; cur.start = c.start || '';
       if (c.originalName && c.originalName !== c.name) {
         students.forEach(function (s) { if (s.cls === c.originalName) s.cls = c.name; });
@@ -207,7 +214,6 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
     },
     deleteClass: function (name) {
       classes = classes.filter(function (c) { return c.name !== name; });
-      students.forEach(function (s) { if (s.cls === name) s.cls = ''; });
       return { ok: true };
     },
     saveStudent: function (st) {
@@ -230,10 +236,13 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
       if (!t || !t.name) throw new Error('템플릿 이름이 없습니다.');
       var orig = t.originalName || t.name, cur = null;
       templates.forEach(function (x) { if (x.name === orig) cur = x; });
-      if (!cur && t.originalName) throw new Error('템플릿을 찾지 못했습니다.');
-      if (!cur) { cur = {}; templates.push(cur); }
+      if (!cur && t.originalName) templates.forEach(function (x) {
+        if (x.name === t.name && x.body === (t.body || '') && x.note === (t.note || '')) { cur = x; orig = t.name; }
+      });
       dup(templates, t.name, orig);
+      if (!cur) { cur = {}; templates.push(cur); }
       cur.name = t.name; cur.body = t.body || ''; cur.note = t.note || '';
+      if (orig !== t.name) automations.forEach(function (a) { if (a.template === orig) a.template = t.name; });
       return { name: cur.name, body: cur.body, note: cur.note };
     },
     deleteTemplate: function (name) {
@@ -248,7 +257,12 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
       if (!cur) { cur = {}; variables.push(cur); }
       dup(variables, v.name, orig);
       cur.name = v.name; cur.value = v.value || ''; cur.note = v.note || '';
-      return { name: cur.name, value: cur.value, note: cur.note };
+      var used = orig !== v.name && templates.some(function (t) {
+        var found = false;
+        t.body.replace(/\{\{([^{}]+)\}\}/g, function (m, key) { if (key.trim() === orig) found = true; return m; });
+        return found;
+      });
+      return { ok: true, name: cur.name, note: used ? '변수 이름을 바꿨습니다. 템플릿의 {{' + orig + '}}도 {{' + v.name + '}}으로 바꿔 주세요.' : '' };
     },
     deleteVariable: function (name) {
       variables = variables.filter(function (v) { return v.name !== name; });
@@ -269,14 +283,14 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
         return {
           name: n, phoneMasked: mask(s.phone), text: f.text, bytes: b,
           type: b > 90 ? 'LMS' : 'SMS', missing: f.missing,
-          duplicate: !!sentKeys[n + '|' + tplName]
+          duplicate: !!sentKeys[today + '|' + n + '|' + tplName + '|수동']
         };
       });
     },
     sendMessages: function (tplName, names) {
       return (names || []).map(function (n) {
         var s = find(n) || { name: n, cls: '', phone: '', fields: {} };
-        var key = n + '|' + tplName;
+        var key = today + '|' + n + '|' + tplName + '|수동';
         var f = fill(tplBody(tplName), varsOf(s));
         var result;
         if (f.missing.length) result = '보류: 빈 변수 ' + f.missing.join(',');
@@ -299,6 +313,8 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
     },
     deleteAutomation: function (row) {
       automations = automations.filter(function (a) { return a.row !== row; });
+      automations.forEach(function (a) { if (a.row > row) a.row--; });
+      nextRow = automations.reduce(function (n, a) { return Math.max(n, a.row + 1); }, 2);
       return { ok: true };
     },
     setAutomationRunning: function (on) {
@@ -309,8 +325,8 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
       return log.slice(0, limit || 100);
     },
     saveSettings: function (s) {
-      settings.academy = s.academy || '';
-      settings.sender = s.sender || '';
+      settings.academy = String(s.academy || '').trim();
+      settings.sender = String(s.sender || '').trim();
       settings.solapiOn = !!s.solapiOn;
       return { ok: true };
     }
