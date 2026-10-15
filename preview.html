@@ -67,6 +67,22 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
   var sentKeys = {};
   var log = [];
 
+  function normalizePhone(phone) {
+    var digits = String(phone == null ? '' : phone).replace(/[^0-9]/g, '');
+    return /^1[0-9]{8,9}$/.test(digits) ? '0' + digits : digits;
+  }
+  function sendBlockers() {
+    var blockers = [];
+    if (!settings.solapiOn) blockers.push('SOLAPI 사용 꺼짐');
+    if (!settings.keysSet) blockers.push('SOLAPI 키 없음');
+    if (!/^[0-9]{8,11}$/.test(normalizePhone(settings.sender))) blockers.push('발신번호 없음');
+    return blockers;
+  }
+  function testResult(s) {
+    if (!normalizePhone(s.phone)) return '실패: 학부모번호 없음';
+    return '시험(미발송): ' + sendBlockers()[0];
+  }
+
   function find(name) {
     for (var i = 0; i < students.length; i++) if (students[i].name === name) return students[i];
     return null;
@@ -127,9 +143,8 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
     var key = dateStr + '|' + s.name + '|' + template + '|자동화 ' + [rule.type, rule.cls || '', rule.minutes || '', rule.time || '', rule.days || ''].join('|');
     if (sentKeys[key]) return { name: s.name, template: template, result: '중복 건너뜀' };
     var f = fill(tplBody(template), varsOf(s, dateStr));
-    var result = '시험(미발송)';
+    var result = testResult(s);
     if (f.missing.length) result = '보류: 빈 변수 ' + f.missing.join(',');
-    else sentKeys[key] = 1;
     pushLog(s.name, template, f.text, result);
     return { name: s.name, template: template, result: result };
   }
@@ -155,7 +170,8 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
           return c;
         }),
         automationRunning: automationRunning,
-        settings: { academy: settings.academy, sender: settings.sender, solapiOn: settings.solapiOn, keysSet: settings.keysSet }
+        settings: { academy: settings.academy, sender: settings.sender, solapiOn: settings.solapiOn, keysSet: settings.keysSet,
+          sendReady: sendBlockers().length === 0, sendBlockers: sendBlockers() }
       };
     },
     getAttendance: function (dateStr, cls) {
@@ -225,7 +241,7 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
       if (st.originalName && st.originalName !== st.name) {
         for (var ds in att) if (att[ds][st.originalName]) { att[ds][st.name] = att[ds][st.originalName]; delete att[ds][st.originalName]; }
       }
-      s.name = st.name; s.cls = st.cls || ''; s.phone = st.phone || ''; s.fields = st.fields || {};
+      s.name = st.name; s.cls = st.cls || ''; s.phone = normalizePhone(st.phone); s.fields = st.fields || {};
       return { ok: true };
     },
     deleteStudent: function (name) {
@@ -295,7 +311,7 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
         var result;
         if (f.missing.length) result = '보류: 빈 변수 ' + f.missing.join(',');
         else if (sentKeys[key]) result = '중복 건너뜀';
-        else { sentKeys[key] = 1; result = '시험(미발송)'; }
+        else result = testResult(s);
         pushLog(n, tplName, f.text, result);
         return { name: n, result: result };
       });
@@ -326,9 +342,13 @@ iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
     },
     saveSettings: function (s) {
       settings.academy = String(s.academy || '').trim();
-      settings.sender = String(s.sender || '').trim();
+      settings.sender = normalizePhone(s.sender);
       settings.solapiOn = !!s.solapiOn;
-      return { ok: true };
+      var blockers = sendBlockers();
+      return { ok: true, sendReady: blockers.length === 0, sendBlockers: blockers,
+        note: settings.solapiOn && blockers.length
+          ? '저장했습니다. 아직 실제 발송할 수 없습니다: ' + blockers.join(', ')
+          : '저장했습니다.' };
     }
   };
 

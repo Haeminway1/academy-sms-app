@@ -197,6 +197,7 @@ main{margin-left:220px;padding:28px}
 <section class="page" id="pg-log" hidden>
 <h2>발송기록·설정</h2>
 <p class="desc">나간 문자 기록을 보고 학원 정보를 고칩니다.</p>
+<div class="card" id="sendStatus" role="status" aria-live="polite"></div>
 <h3>발송기록</h3>
 <div class="card"><div id="logList"><span class="meta">페이지를 열면 불러옵니다.</span></div></div>
 <h3>설정</h3>
@@ -963,6 +964,16 @@ function loadLog() {
   });
 }
 function renderSettings() {
+  var fixes = {
+    'SOLAPI 사용 꺼짐': '아래 SOLAPI 사용을 켜고 저장하세요.',
+    'SOLAPI 키 없음': 'Apps Script 프로젝트 설정 → 스크립트 속성에 SOLAPI_KEY·SOLAPI_SECRET 키 2개를 넣으세요.',
+    '발신번호 없음': '아래 발신번호에 Solapi에서 등록·승인된 번호(숫자 8~11자리)를 넣고 저장하세요.'
+  };
+  $('sendStatus').innerHTML = app.settings.sendReady
+    ? '<b>실제 발송 가능 ✓</b><div class="meta">Solapi에 등록·승인된 발신번호인지 확인하세요. 접수는 휴대폰 도착 확인과 다릅니다.</div>'
+    : '<b>시험 모드 · 실제 문자가 나가지 않습니다</b>' + (app.settings.sendBlockers || []).map(function (reason) {
+      return '<div class="line"><b>' + esc(reason) + '</b><div class="meta">' + esc(fixes[reason] || '') + '</div></div>';
+    }).join('');
   $('setAcademy').value = app.settings.academy || '';
   $('setSender').value = app.settings.sender || '';
   $('setSolapi').checked = !!app.settings.solapiOn;
@@ -974,7 +985,7 @@ function renderSettings() {
 $('setSave').onclick = function () {
   call('saveSettings', {
     academy: $('setAcademy').value, sender: $('setSender').value, solapiOn: $('setSolapi').checked
-  }).then(function () { msg('logMsg', '저장했습니다.'); })
+  }).then(function (r) { msg('logMsg', r.note || '저장했습니다.'); })
     .catch(function (e) { msg('logMsg', errText(e), true); });
 };
 

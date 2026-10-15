@@ -4,14 +4,14 @@
  * 준비: 같은 Apps Script 프로젝트에 'logic' 파일을 만들고 logic.js를 붙여 넣는다
  *       (fillTemplate·byteLength·messageType·dedupKey·isOnValue·hhmmToMinutes·
  *        isClassDay·buildVars·automationSentence·dueLate·dueScheduled·
- *        SYSTEM_VAR_NAMES·toDigits를 여기서 부른다).
+ *        SYSTEM_VAR_NAMES·toDigits·normalizePhone·sendBlockers를 여기서 부른다).
  *       'Index' HTML 파일을 만들어 Index.html을 붙여 넣는다.
  *       실발송을 켜려면 프로젝트 설정 → 스크립트 속성에 2개를 넣고
  *       설정 탭의 'SOLAPI 사용'을 '예'로 바꾼다:
  *         SOLAPI_KEY     Solapi API 키
  *         SOLAPI_SECRET  Solapi API 시크릿
  *       둘 중 하나라도 빠지면 시험 모드: 문자는 나가지 않고
- *       발송기록에 '시험(미발송)'으로만 남는다.
+ *       발송기록에 '시험(미발송): SOLAPI 키 없음'처럼 이유와 함께 남는다.
  *
  * 탭(시트): 반·학생·출결·템플릿·변수·자동화·발송기록·설정 — 머리글은 sheet-template.md 참고.
  *   반       [반, 요일, 시작]
@@ -132,6 +132,9 @@ function setupSheets() {
     var s = ss.insertSheet(d.name);
     s.getRange(1, 1, 1, d.header.length).setValues([d.header]).setFontWeight('bold');
     s.setFrozenRows(1);
+    if (d.name === SHEET_STUDENTS) {
+      s.getRange(1, d.header.indexOf('학부모번호') + 1, s.getMaxRows(), 1).setNumberFormat('@');
+    }
     if (d.rows.length) {
       s.getRange(2, 1, d.rows.length, d.header.length).setValues(d.rows);
     }
@@ -208,11 +211,9 @@ function dateStr_(v) {
   return String(v).trim().slice(0, 10);
 }
 
-/** 숫자형 셀에 앞 0이 떨어진 번호(1012345678)를 되살린다. */
+/** 번호 보정은 Node에서도 검증하는 순수 함수로 모은다. */
 function normalizePhone_(v) {
-  var d = toDigits(v);
-  if (d.length === 10 && d.charAt(0) === '1') d = '0' + d;
-  return d;
+  return normalizePhone(v);
 }
 
 function maskPhone_(phone) {
@@ -352,7 +353,7 @@ function readStudents_() {
       row: r._row,
       name: str_(r['이름']),
       cls: str_(r['반']),
-      phone: cellText_(r['학부모번호']),
+      phone: normalizePhone_(r['학부모번호']),
       fields: fields
     };
     if (s.name) out.push(s);
@@ -447,6 +448,7 @@ function settings_() {
     var k = str_(r['항목']);
     if (k) map[k] = str_(r['값']);
   });
+  if (map['발신번호'] != null) map['발신번호'] = normalizePhone_(map['발신번호']);
   return map;
 }
 
@@ -456,19 +458,22 @@ function setSetting_(key, value) {
   var header = headerValues_(SHEET_SETTINGS);
   var matches = rowsAsObjects_(SHEET_SETTINGS).filter(function (r) { return str_(r['항목']) === key; });
   if (matches.length) {
-    s.getRange(matches[0]._row, header.indexOf('값') + 1).setValue(value);
+    var cell = s.getRange(matches[0]._row, header.indexOf('값') + 1);
+    if (key === '발신번호') cell.setNumberFormat('@');
+    cell.setValue(value);
     for (var i = matches.length - 1; i > 0; i--) s.deleteRow(matches[i]._row);
   } else {
+    if (key === '발신번호') s.getRange(s.getLastRow() + 1, header.indexOf('값') + 1).setNumberFormat('@');
     s.appendRow(header.map(function (h) { return h === '항목' ? key : h === '값' ? value : ''; }));
   }
 }
 
-/** 발송기록의 '키' 열을 집합으로. 여기 있는 키는 다시 보내지 않는다. */
+/** 접수된 발송 키와 기존 보류 기록 키만 유지한다. 시험·실패는 재시도할 수 있다. */
 function sentKeys_() {
   var keys = {};
   rowsAsObjects_(SHEET_LOG).forEach(function (r) {
     var k = str_(r['키']);
-    if (k) keys[k] = true;
+    if (k && (str_(r['결과']) === '접수' || /^보류/.test(str_(r['결과'])))) keys[k] = true;
   });
   return keys;
 }
@@ -487,8 +492,7 @@ function appendLog_(name, phone, templateName, text, result, key) {
  */
 function getApp() {
   var st = settings_();
-  var props = PropertiesService.getScriptProperties();
-  var keysSet = !!(props.getProperty('SOLAPI_KEY') && props.getProperty('SOLAPI_SECRET'));
+  var status = sendStatus_(st);
   var studentColumns = headerValues_(SHEET_STUDENTS).filter(function (h) {
     return h && h !== '이름' && h !== '반' && h !== '학부모번호';
   });
@@ -503,7 +507,7 @@ function getApp() {
       return {
         name: s.name,
         cls: s.cls,
-        phone: s.phone, // 편집용으로 원래 번호를 준다
+        phone: s.phone, // 편집 화면에도 보정한 번호를 준다
         phoneMasked: maskPhone_(s.phone),
         fields: s.fields
       };
@@ -524,7 +528,9 @@ function getApp() {
       academy: st['학원명'] || '',
       sender: st['발신번호'] || '',
       solapiOn: st['SOLAPI 사용'] === '예',
-      keysSet: keysSet
+      keysSet: status.keysSet,
+      sendReady: status.sendReady,
+      sendBlockers: status.sendBlockers
     }
   };
 }
@@ -601,7 +607,7 @@ function saveStudent(input) {
   var name = str_(input.name);
   if (!name) throw new Error('학생 이름을 넣어 주세요.');
   var cls = str_(input.cls);
-  var phone = str_(input.phone);
+  var phone = normalizePhone_(input.phone);
   var original = str_(input.originalName) || name;
   var fields = (input.fields !== null && typeof input.fields === 'object') ? input.fields : {};
 
@@ -637,6 +643,8 @@ function saveStudent(input) {
       if (Object.prototype.hasOwnProperty.call(fields, h)) return str_(fields[h]);
       return row ? cellText_(existing[h]) : '';
     });
+    var phoneCol = header.indexOf('학부모번호') + 1;
+    if (phoneCol) s.getRange(1, phoneCol, s.getMaxRows(), 1).setNumberFormat('@');
     if (row) s.getRange(row, 1, 1, header.length).setValues([values]);
     else s.appendRow(values);
     return { ok: true, name: name };
@@ -765,7 +773,7 @@ function saveAttendance(dateStr, rows, status) {
           return;
         }
         var result = deliver_(s, st, rule.template, filled.text, key);
-        keys[key] = true;
+        if (result === '접수') keys[key] = true;
         sent.push({ name: s.name, template: rule.template, result: result });
       });
     });
@@ -971,7 +979,7 @@ function sendMessages(templateName, names) {
         return;
       }
       var result = deliver_(s, st, templateName, filled.text, key);
-      keys[key] = true;
+      if (result === '접수') keys[key] = true;
       results.push({ name: s.name, result: result });
     });
   } finally {
@@ -1149,8 +1157,8 @@ function runAutomations() {
           }
           return;
         }
-        deliver_(s, st, rule.template, filled.text, key);
-        keys[key] = true;
+        var result = deliver_(s, st, rule.template, filled.text, key);
+        if (result === '접수') keys[key] = true;
       });
     });
   } finally {
@@ -1183,9 +1191,13 @@ function saveSettings(input) {
   lock.waitLock(LOCK_MS);
   try {
     setSetting_('학원명', str_(input.academy));
-    setSetting_('발신번호', str_(input.sender));
+    setSetting_('발신번호', normalizePhone_(input.sender));
     setSetting_('SOLAPI 사용', input.solapiOn ? '예' : '아니오');
-    return { ok: true };
+    var status = sendStatus_(settings_());
+    return { ok: true, sendReady: status.sendReady, sendBlockers: status.sendBlockers,
+      note: input.solapiOn && !status.sendReady
+        ? '저장했습니다. 아직 실제 발송할 수 없습니다: ' + status.sendBlockers.join(', ')
+        : '저장했습니다.' };
   } finally {
     lock.releaseLock();
   }
@@ -1199,16 +1211,17 @@ function toast_(msg) {
 
 // ---------- 발송 ----------
 
-/** 설정 'SOLAPI 사용'이 '예'이고 스크립트 속성 키 2개가 있을 때만 실발송. */
-function solapiOn_(st) {
-  if (st['SOLAPI 사용'] !== '예') return false;
+/** 실제 발송 조건을 화면·저장 안내·발송 결과가 함께 사용한다. */
+function sendStatus_(st) {
   var props = PropertiesService.getScriptProperties();
-  return !!(props.getProperty('SOLAPI_KEY') && props.getProperty('SOLAPI_SECRET'));
+  var keysSet = !!(props.getProperty('SOLAPI_KEY') && props.getProperty('SOLAPI_SECRET'));
+  var blockers = sendBlockers(st['SOLAPI 사용'] === '예', keysSet, st['발신번호']);
+  return { keysSet: keysSet, sendReady: blockers.length === 0, sendBlockers: blockers };
 }
 
 /**
  * 한 명에게 보내고 발송기록에 남긴다.
- * @returns {string} '시험(미발송)' | '접수' | '실패: <이유>'
+ * @returns {string} '시험(미발송): <이유>' | '접수' | '실패: <이유>'
  */
 function deliver_(s, st, templateName, text, key) {
   var phone = normalizePhone_(s.phone);
@@ -1216,15 +1229,13 @@ function deliver_(s, st, templateName, text, key) {
     appendLog_(s.name, '', templateName, text, '실패: 학부모번호 없음', key);
     return '실패: 학부모번호 없음';
   }
-  if (!solapiOn_(st)) {
-    appendLog_(s.name, phone, templateName, text, '시험(미발송)', key);
-    return '시험(미발송)';
+  var status = sendStatus_(st);
+  if (!status.sendReady) {
+    var testResult = '시험(미발송): ' + status.sendBlockers[0];
+    appendLog_(s.name, phone, templateName, text, testResult, key);
+    return testResult;
   }
   var from = normalizePhone_(st['발신번호']);
-  if (!from) {
-    appendLog_(s.name, phone, templateName, text, '실패: 설정 탭에 발신번호 없음', key);
-    return '실패: 설정 탭에 발신번호 없음';
-  }
   var result;
   try {
     var resp = UrlFetchApp.fetch(SOLAPI_URL, {

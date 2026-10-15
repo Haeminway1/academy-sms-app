@@ -19,6 +19,8 @@ const {
   isClassDay,
   dueNoShows,
   toDigits,
+  normalizePhone,
+  sendBlockers,
   SYSTEM_VAR_NAMES,
   buildVars,
   automationSentence,
@@ -341,7 +343,28 @@ test('ruleKey: 행 번호가 아니라 규칙 내용으로 정해진다', () => 
   assert.notEqual(ruleKey(a), ruleKey({ ...a, minutes: 15 }));
 });
 
-function gasApp() {
+test('normalizePhone: 숫자형 셀의 앞 0 복원과 번호 경계', () => {
+  for (const [input, expected] of [
+    [1072367106, '01072367106'], [101234567, '0101234567'],
+    ['010-1234-5678', '01012345678'], ['02-123-4567', '021234567'],
+    ['1588-1234', '15881234'], ['12345678', '12345678'],
+    ['12345678901', '12345678901'], [null, ''], ['', ''],
+    ['(Solapi에 등록한 번호)', '']
+  ]) assert.equal(normalizePhone(input), expected, String(input));
+});
+
+test('sendBlockers: 꺼짐·키·발신번호 사유를 모두 알리고 정상 설정은 통과', () => {
+  assert.deepEqual(sendBlockers(false, false, ''), ['SOLAPI 사용 꺼짐', 'SOLAPI 키 없음', '발신번호 없음']);
+  assert.deepEqual(sendBlockers(true, false, '01011112222'), ['SOLAPI 키 없음']);
+  for (const sender of ['', '(Solapi에 등록한 번호)', '1234567', '010123456789']) {
+    assert.deepEqual(sendBlockers(true, true, sender), ['발신번호 없음']);
+  }
+  for (const sender of ['1588-1234', '02-123-4567', 1072367106, 101234567]) {
+    assert.deepEqual(sendBlockers(true, true, sender), []);
+  }
+});
+
+function gasApp(options = {}) {
   const tabs = {
     '설정': [['항목', '값'], ['학원명', '첫 이름'], ['학원명', '옛 이름'], ['발신번호', '01011112222'], ['SOLAPI 사용', '아니오']],
     '반': [['반', '요일', '시작'], ['A', '', '16:00']],
@@ -352,35 +375,54 @@ function gasApp() {
     '자동화': [['켜기', '종류', '분', '시각', '요일', '반', '템플릿'], ['예', '결석 저장 즉시', '', '', '', '', '결석']],
     '발송기록': [['시각', '이름', '번호', '템플릿', '내용', '결과', '키']]
   };
+  const props = options.props || {};
+  const formats = [], requests = [];
   function sheet(name) {
     const data = tabs[name];
+    if (!data) return null;
     return {
       getDataRange: () => ({ getValues: () => data.map(row => row.slice()) }),
       getLastRow: () => data.length,
-      getLastColumn: () => data[0].length,
+      getLastColumn: () => data[0]?.length || 0,
+      getMaxRows: () => 1000,
+      getMaxColumns: () => 26,
+      setFrozenRows() {},
       appendRow: row => data.push(row.slice()),
       deleteRow: row => data.splice(row - 1, 1),
       getRange: (row, col, height = 1, width = 1) => ({
+        setNumberFormat(format) { formats.push({ name, row, col, height, width, format }); return this; },
+        setFontWeight() { return this; },
         getValues: () => Array.from({ length: height }, (_, i) =>
           Array.from({ length: width }, (_, j) => data[row - 1 + i]?.[col - 1 + j] ?? '')),
-        setValue: value => { data[row - 1][col - 1] = value; },
-        setValues: values => values.forEach((cells, i) => cells.forEach((value, j) => {
-          data[row - 1 + i][col - 1 + j] = value;
-        }))
+        setValue(value) { data[row - 1][col - 1] = value; return this; },
+        setValues(values) {
+          values.forEach((cells, i) => cells.forEach((value, j) => {
+            if (!data[row - 1 + i]) data[row - 1 + i] = [];
+            data[row - 1 + i][col - 1 + j] = value;
+          }));
+          return this;
+        }
       })
     };
   }
   const code = readFileSync(new URL('./Code.gs', import.meta.url), 'utf8');
-  const api = new Function('SpreadsheetApp', 'PropertiesService', 'LockService', 'Session', 'Utilities', 'ScriptApp',
-    src + '\n' + code + '\nreturn {getApp, saveSettings, saveAttendance, getAttendance, saveClass, saveTemplate, saveVariable, previewTemplate};')(
-    { getActiveSpreadsheet: () => ({ getSheetByName: sheet }) },
-    { getScriptProperties: () => ({ getProperty: () => null }) },
+  const api = new Function('SpreadsheetApp', 'PropertiesService', 'LockService', 'Session', 'Utilities', 'ScriptApp', 'UrlFetchApp',
+    src + '\n' + code + '\nreturn {getApp, setupSheets, saveStudent, saveSettings, saveAttendance, getAttendance, saveClass, saveTemplate, saveVariable, previewTemplate, sendMessages, previewMessages, runAutomations, getLog};')(
+    { getActiveSpreadsheet: () => ({ getSheetByName: sheet, getId: () => 'test-sheet', toast() {},
+      insertSheet(name) { tabs[name] = []; return sheet(name); } }) },
+    { getScriptProperties: () => ({ getProperty: key => props[key] || null, setProperty: (key, value) => { props[key] = value; } }) },
     { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     { getScriptTimeZone: () => 'Asia/Seoul' },
-    { formatDate: (_date, _tz, format) => format === 'HH:mm' ? '16:05' : '2026-10-15' },
-    { getProjectTriggers: () => [] }
+    { formatDate: (_date, _tz, format) => format === 'HH:mm' ? '16:05' : '2026-10-15',
+      getUuid: () => 'test-uuid', computeHmacSha256Signature: () => [1, 2, 3] },
+    { getProjectTriggers: () => [] },
+    { fetch(url, input) {
+      requests.push({ url, ...JSON.parse(input.payload) });
+      return { getResponseCode: () => options.httpCode || 200,
+        getContentText: () => JSON.stringify(options.body || {}) };
+    } }
   );
-  return { api, tabs };
+  return { api, tabs, props, formats, requests, options };
 }
 
 test('GAS: 중복 설정 행도 저장 후 getApp·학원명 미리보기에 즉시 반영, 재저장 불변', () => {
@@ -396,18 +438,114 @@ test('GAS: 중복 설정 행도 저장 후 getApp·학원명 미리보기에 즉
   assert.equal(JSON.stringify(tabs), saved);
 });
 
-test('GAS: 날짜+학생 출결 upsert, 결석→등원, 자동 문자 중복 방지', () => {
+test('GAS: 학생 생성·수정은 학부모번호 열을 일반 텍스트로, 숫자형 셀은 읽을 때 복원', () => {
+  const { api, tabs, formats } = gasApp();
+  delete tabs['학생'];
+  api.setupSheets();
+  assert.ok(formats.some(f => f.name === '학생' && f.col === 3 && f.height === 1000 && f.format === '@'));
+  tabs['학생'] = [['반', '학부모번호', '이름'], ['A', 1072367106, '홍길동']];
+  assert.equal(api.getApp().students[0].phone, '01072367106');
+  for (const name of ['홍길동', '새 학생']) {
+    api.saveStudent({ name, cls: 'A', phone: 101234567 });
+    const row = tabs['학생'].find(r => r[2] === name);
+    assert.equal(row[1], '0101234567');
+  }
+  assert.ok(formats.some(f => f.name === '학생' && f.col === 2 && f.height === 1000 && f.format === '@'));
+});
+
+test('GAS: 사용 켜짐·키 일부 누락·발신번호 자리표시자의 사유가 설정과 발송 결과에 나온다', () => {
+  const f = gasApp();
+  f.tabs['템플릿'][1][1] = '{{이름}} 안내';
+  const save = sender => f.api.saveSettings({ academy: '학원', sender, solapiOn: true });
+  const result = save('(Solapi에 등록한 번호)');
+  assert.equal(result.sendReady, false);
+  assert.deepEqual(result.sendBlockers, ['SOLAPI 키 없음', '발신번호 없음']);
+  assert.match(result.note, /SOLAPI 키 없음.*발신번호 없음/);
+  for (const props of [{}, { SOLAPI_KEY: 'test-key' }, { SOLAPI_SECRET: 'test-secret' }]) {
+    delete f.props.SOLAPI_KEY; delete f.props.SOLAPI_SECRET;
+    Object.assign(f.props, props);
+    assert.equal(f.api.getApp().settings.keysSet, false);
+    assert.equal(f.api.sendMessages('결석', ['홍길동'])[0].result, '시험(미발송): SOLAPI 키 없음');
+  }
+  Object.assign(f.props, { SOLAPI_KEY: 'test-key', SOLAPI_SECRET: 'test-secret' });
+  for (const sender of ['', '(Solapi에 등록한 번호)', '1234567', '010123456789']) {
+    save(sender);
+    assert.equal(f.api.sendMessages('결석', ['홍길동'])[0].result, '시험(미발송): 발신번호 없음');
+  }
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.api.getLog()[0].result, '시험(미발송): 발신번호 없음');
+  assert.equal(save(1072367106).sendReady, true);
+  assert.equal(f.api.getApp().settings.sender, '01072367106');
+  assert.deepEqual(f.api.getApp().settings.sendBlockers, []);
+});
+
+test('GAS: 시험·실패 후 같은 날 실제 접수 가능, 접수 뒤 자동·수동 각각 중복 차단', () => {
+  const f = gasApp();
+  f.tabs['템플릿'].push(['안내', '{{이름}} 안내', '']);
+  f.tabs['학생'][1][2] = 1072367106;
+  const auto = () => f.api.saveAttendance('2026-10-15', [{ name: '홍길동', status: '결석' }]).sent[0].result;
+  const manual = () => f.api.sendMessages('안내', ['홍길동', '홍길동']).map(r => r.result);
+  assert.equal(auto(), '시험(미발송): SOLAPI 사용 꺼짐');
+  assert.deepEqual(manual(), ['시험(미발송): SOLAPI 사용 꺼짐', '시험(미발송): SOLAPI 사용 꺼짐']);
+  Object.assign(f.props, { SOLAPI_KEY: 'test-key', SOLAPI_SECRET: 'test-secret' });
+  f.api.saveSettings({ academy: '학원', sender: 1072367106, solapiOn: true });
+  f.options.httpCode = 500;
+  assert.equal(auto(), '실패: HTTP 500');
+  assert.deepEqual(manual(), ['실패: HTTP 500', '실패: HTTP 500']);
+  f.options.httpCode = 200;
+  assert.equal(auto(), '접수');
+  assert.equal(auto(), '중복 건너뜀');
+  assert.deepEqual(manual(), ['접수', '중복 건너뜀']);
+  assert.equal(f.api.previewMessages('안내', ['홍길동'])[0].duplicate, true);
+  assert.ok(f.requests.every(r => r.messages[0].to === '01072367106' && r.messages[0].from === '01072367106'));
+});
+
+test('GAS: 옛 시험·실패 키는 무시하고 접수·보류 키만 유지한다', () => {
+  for (const [result, duplicate] of [['시험(미발송)', false], ['시험(미발송): SOLAPI 키 없음', false],
+    ['실패: HTTP 500', false], ['접수', true], ['보류: 빈 변수 메모', true], ['', false]]) {
+    const { api, tabs } = gasApp();
+    tabs['발송기록'].push(['2026-10-15', '홍길동', '', '결석', '', result, '2026-10-15|홍길동|결석|수동']);
+    assert.equal(api.previewMessages('결석', ['홍길동'])[0].duplicate, duplicate, result);
+  }
+});
+
+test('GAS: 예약 자동화도 시험·실패 후 재시도하고 빈 변수 보류는 하루 한 번 기록', () => {
+  const f = gasApp();
+  f.tabs['템플릿'].push(['예약', '{{이름}} 안내', '']);
+  f.tabs['자동화'] = [f.tabs['자동화'][0], ['예', '예약 발송', '', '16:00', '', '', '예약']];
+  f.api.runAutomations(); f.api.runAutomations();
+  assert.equal(f.tabs['발송기록'].length, 3);
+  Object.assign(f.props, { SOLAPI_KEY: 'test-key', SOLAPI_SECRET: 'test-secret' });
+  f.api.saveSettings({ sender: '01011112222', solapiOn: true });
+  f.options.httpCode = 500;
+  f.api.runAutomations();
+  f.options.httpCode = 200;
+  f.api.runAutomations(); f.api.runAutomations();
+  assert.deepEqual(f.tabs['발송기록'].slice(1).map(r => r[5]), [
+    '시험(미발송): SOLAPI 사용 꺼짐', '시험(미발송): SOLAPI 사용 꺼짐', '실패: HTTP 500', '접수'
+  ]);
+  f.tabs['템플릿'][2][1] = '{{메모}}';
+  f.tabs['발송기록'] = [f.tabs['발송기록'][0]];
+  f.api.runAutomations(); f.api.runAutomations();
+  assert.equal(f.tabs['발송기록'].length, 2);
+  assert.equal(f.tabs['발송기록'][1][5], '보류: 빈 변수 메모');
+  f.api.saveStudent({ name: '홍길동', cls: 'A', phone: '01012345678', fields: { '메모': '채움' } });
+  f.api.runAutomations();
+  assert.equal(f.tabs['발송기록'][2][5], '접수');
+});
+
+test('GAS: 날짜+학생 출결 upsert, 결석→등원, 시험 문자는 다시 처리', () => {
   const { api, tabs } = gasApp();
   const save = status => api.saveAttendance('2026-10-15', [{ name: '홍길동', status }]);
-  assert.equal(save('결석').sent[0].result, '시험(미발송)');
-  assert.equal(save('결석').sent[0].result, '중복 건너뜀');
+  assert.equal(save('결석').sent[0].result, '시험(미발송): SOLAPI 사용 꺼짐');
+  assert.equal(save('결석').sent[0].result, '시험(미발송): SOLAPI 사용 꺼짐');
   save('등원');
   assert.equal(tabs['출결'].length, 2);
   assert.equal(api.getAttendance('2026-10-15', '')[0].status, '등원');
-  assert.equal(tabs['발송기록'].length, 2);
+  assert.equal(tabs['발송기록'].length, 3);
   api.saveAttendance('2026-10-14', '홍길동', '결석');
   assert.equal(tabs['출결'].length, 3);
-  assert.equal(tabs['발송기록'].length, 2);
+  assert.equal(tabs['발송기록'].length, 3);
 });
 
 test('GAS: 기존 출결 중복도 해당 날짜·학생만 정리, 잘못된 묶음은 쓰기 전 거절', () => {
@@ -481,19 +619,31 @@ test('데모 API: 설정·템플릿·반 재저장과 이름 변경, 변수 경�
   assert.match((await call('saveVariable', { name: '새 전화', originalName: '학원전화', value: '02' })).note, /학원전화/);
 });
 
+test('데모 API: 시험 모드 상태·켜기 저장 안내·전화번호 보정이 실제 앱과 같다', async () => {
+  const call = previewApi();
+  assert.deepEqual((await call('getApp')).settings.sendBlockers, ['SOLAPI 사용 꺼짐', 'SOLAPI 키 없음']);
+  const saved = await call('saveSettings', { academy: '학원', sender: '(Solapi에 등록한 번호)', solapiOn: true });
+  assert.equal(saved.sendReady, false);
+  assert.deepEqual(saved.sendBlockers, ['SOLAPI 키 없음', '발신번호 없음']);
+  assert.match(saved.note, /아직 실제 발송할 수 없습니다/);
+  await call('saveStudent', { name: '홍길동', cls: '중2A', phone: 1072367106 });
+  assert.equal((await call('getApp')).students[0].phone, '01072367106');
+  assert.equal((await call('sendMessages', '결석 안내', ['홍길동']))[0].result, '시험(미발송): SOLAPI 키 없음');
+});
+
 test('데모 API: 출결 upsert·지난 날짜·트리거 꺼짐·수동/자동 별도 중복 키', async () => {
   const call = previewApi();
   const { today } = await call('getApp');
   await call('saveClass', { name: '중2A', days: '', start: '16:00' });
   await call('setAutomationRunning', false);
   const save = status => call('saveAttendance', today, [{ name: '홍길동', status }]);
-  assert.equal((await save('결석')).sent[0].result, '시험(미발송)');
-  assert.equal((await save('결석')).sent[0].result, '중복 건너뜀');
+  assert.equal((await save('결석')).sent[0].result, '시험(미발송): SOLAPI 사용 꺼짐');
+  assert.equal((await save('결석')).sent[0].result, '시험(미발송): SOLAPI 사용 꺼짐');
   await save('등원');
   assert.equal((await call('getAttendance', today, '중2A'))[0].status, '등원');
   const manual = await call('sendMessages', '결석 안내', ['홍길동']);
-  assert.equal(manual[0].result, '시험(미발송)');
-  assert.equal((await call('sendMessages', '결석 안내', ['홍길동']))[0].result, '중복 건너뜀');
+  assert.equal(manual[0].result, '시험(미발송): SOLAPI 사용 꺼짐');
+  assert.equal((await call('sendMessages', '결석 안내', ['홍길동']))[0].result, '시험(미발송): SOLAPI 사용 꺼짐');
   const past = await call('saveAttendance', '2000-01-01', '홍길동', '결석');
   assert.deepEqual(past.sent, []);
   assert.match(past.note, /지난 날짜/);
@@ -588,6 +738,24 @@ test('화면 동기화: 모든 변경 성공마다 getApp 1회, 전체 의존 �
     assert.equal(f.node('setSave').disabled, false, fn);
     assert.equal(f.client.busy(), false, fn);
   }
+});
+
+test('설정 화면: 미발송 사유별 해결 방법과 실제 발송 가능 상태를 렌더링한다', async () => {
+  const f = syncClient();
+  f.state.settings.sendBlockers = ['SOLAPI 사용 꺼짐', 'SOLAPI 키 없음', '발신번호 없음'];
+  f.state.settings.sendReady = false;
+  await f.client.loadApp();
+  const status = f.node('sendStatus').innerHTML;
+  assert.match(status, /실제 문자가 나가지 않습니다/);
+  assert.match(status, /SOLAPI 사용을 켜고 저장/);
+  assert.match(status, /프로젝트 설정 → 스크립트 속성/);
+  assert.match(status, /SOLAPI_KEY·SOLAPI_SECRET 키 2개/);
+  assert.match(status, /등록·승인된 번호/);
+  f.state.settings.sendBlockers = [];
+  f.state.settings.sendReady = true;
+  await f.client.loadApp();
+  assert.match(f.node('sendStatus').innerHTML, /실제 발송 가능 ✓/);
+  assert.doesNotMatch(f.node('sendStatus').innerHTML, /시험 모드/);
 });
 
 test('화면 동기화: 학원명·제목·설정 갱신, 미저장 텍스트 보존, 포커스 debounce와 저장 중 제외', async () => {

@@ -159,6 +159,22 @@ function toDigits(phone) {
   return String(phone == null ? '' : phone).replace(/[^0-9]/g, '');
 }
 
+/** 시트가 숫자로 바꿔 잃은 휴대폰 번호의 앞 0을 복원한다. */
+function normalizePhone(phone) {
+  var digits = toDigits(phone);
+  if (/^1[0-9]{8,9}$/.test(digits)) digits = '0' + digits;
+  return digits;
+}
+
+/** 실제 발송에 빠진 설정. 첫 사유는 발송 결과에, 전체는 설정 화면에 쓴다. */
+function sendBlockers(solapiOn, keysSet, sender) {
+  var blockers = [];
+  if (!solapiOn) blockers.push('SOLAPI 사용 꺼짐');
+  if (!keysSet) blockers.push('SOLAPI 키 없음');
+  if (!/^[0-9]{8,11}$/.test(normalizePhone(sender))) blockers.push('발신번호 없음');
+  return blockers;
+}
+
 /** 시스템 변수 이름 — 템플릿에서 {{이름}}처럼 쓰고 자동으로 채워진다. */
 var SYSTEM_VAR_NAMES = {
   '이름': true, '반': true, '날짜': true, '시각': true,
@@ -315,6 +331,8 @@ if (typeof module !== 'undefined') {
     isClassDay: isClassDay,
     dueNoShows: dueNoShows,
     toDigits: toDigits,
+    normalizePhone: normalizePhone,
+    sendBlockers: sendBlockers,
     SYSTEM_VAR_NAMES: SYSTEM_VAR_NAMES,
     buildVars: buildVars,
     automationSentence: automationSentence,
