@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>학원 문자</title>
+<style>
+:root{--bg:#0f1116;--panel:#1a1d24;--line:#2a2f3a;--txt:#e8eaf0;--sub:#98a0ae;--acc:#3182F6;--ok:#3fbf7f;--warn:#e8b44a;--bad:#e06565}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.5 'Apple SD Gothic Neo','Malgun Gothic',sans-serif}
+button{font:inherit;min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:#232733;color:var(--txt);cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+button.acc{background:var(--acc);border-color:var(--acc);color:#fff}
+button.danger{color:var(--bad)}
+input,select,textarea{font:inherit;min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:#232733;color:var(--txt);width:100%}
+textarea{padding:10px 12px;resize:vertical}
+h2{font-size:22px;margin:0 0 4px}
+h3{font-size:16px;margin:18px 0 8px}
+.desc{color:var(--sub);margin:0 0 16px;font-size:15px}
+.meta{color:var(--sub);font-size:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
+.bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.bar>*{flex:1 1 110px;min-width:0}
+#attDate{flex-basis:150px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.row>*{flex:1;min-width:120px}
+.msg{margin:4px 0 12px;font-size:14px;color:var(--sub)}
+.err{color:var(--bad)}
+.tbl{width:100%;border-collapse:collapse;font-size:15px}
+.tbl th,.tbl td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl th{color:var(--sub);font-weight:400}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:13px;border:1px solid var(--line);margin:0 6px 4px 0}
+.b-sms{color:var(--ok);border-color:var(--ok)}
+.b-lms{color:var(--warn);border-color:var(--warn)}
+.b-dup{color:var(--bad);border-color:var(--bad)}
+.st{display:flex;gap:8px;margin-top:10px}
+.st button{flex:1;padding:0 4px}
+.st button.on{background:var(--c);border-color:var(--c);color:#14151a;font-weight:700}
+.st button:nth-child(1){--c:var(--ok)}
+.st button:nth-child(2){--c:var(--warn)}
+.st button:nth-child(3){--c:var(--bad)}
+.pick{display:flex;align-items:center;gap:10px;min-height:44px;cursor:pointer;padding:6px 12px}
+.pick input{width:22px;height:22px;min-height:0;margin:0;flex:none}
+.body-text{white-space:pre-wrap;margin:8px 0;font-size:15px;word-break:break-word}
+.warnline{color:var(--warn);font-size:14px;margin:6px 0 0}
+.line{padding:8px 0;border-bottom:1px solid var(--line);font-size:15px}
+.line:last-child{border-bottom:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 10px}
+.chip{min-height:36px;padding:0 12px;border-radius:999px;font-size:14px}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.days{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.days .chip{min-height:36px;padding:0 10px}
+.grid{display:grid;gap:10px;grid-template-columns:1fr}
+@media (min-width:720px){.grid{grid-template-columns:1fr 1fr}}
+.tplwrap{display:grid;gap:14px;grid-template-columns:1fr}
+.tpllist .card{cursor:pointer;margin-bottom:8px}
+.tpllist .card.on{border-color:var(--acc)}
+.switchline{display:flex;align-items:center;gap:12px;min-height:44px;margin-bottom:14px;cursor:pointer}
+.switchline input{width:24px;height:24px;min-height:0;margin:0;flex:none}
+#topbar{position:sticky;top:0;background:var(--bg);padding:12px 16px;border-bottom:1px solid var(--line);font-weight:700;font-size:18px;z-index:5}
+main{padding:16px 16px 96px;max-width:1100px;margin:0 auto}
+#side{display:none}
+#bnav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--panel);border-top:1px solid var(--line);z-index:6}
+#bnav button{flex:1;border:0;border-radius:0;min-height:56px;background:none;font-size:13px;color:var(--sub)}
+#bnav button.on{color:var(--acc);font-weight:700}
+#more{position:fixed;left:0;right:0;bottom:56px;background:var(--panel);border-top:1px solid var(--line);padding:10px;display:flex;gap:10px;z-index:6}
+[hidden]{display:none!important}
+#more button{flex:1}
+@media (min-width:900px){
+#side{display:block;position:fixed;left:0;top:0;bottom:0;width:220px;background:var(--panel);border-right:1px solid var(--line);padding:22px 14px}
+#side .ac{font-weight:700;font-size:17px;margin:0 4px 18px}
+#side button{display:block;width:100%;text-align:left;margin-bottom:6px;background:none;border-color:transparent}
+#side button.on{background:#232a3a;border-color:var(--acc);color:#fff}
+#topbar,#bnav,#more{display:none}
+main{margin-left:220px;padding:28px}
+.tplwrap{grid-template-columns:280px 1fr}
+}
+</style>
+</head>
+<body>
+<aside id="side">
+<div class="ac academyName">학원 문자</div>
+<button data-nav="att" class="on">오늘 출결</button>
+<button data-nav="sms">문자 보내기</button>
+<button data-nav="tpl">템플릿</button>
+<button data-nav="var">변수</button>
+<button data-nav="auto">자동 발송</button>
+<button data-nav="stu">학생·반</button>
+<button data-nav="log">발송기록·설정</button>
+</aside>
+<header id="topbar"><span class="academyName">학원 문자</span></header>
+<main>
+
+<section class="page" id="pg-att">
+<h2>오늘 출결</h2>
+<p class="desc">여기서 체크한 출결을 보고 자동 발송이 결석·지각·미출석 문자를 보냅니다.</p>
+<div class="bar">
+<input type="date" id="attDate" aria-label="날짜">
+<select id="attCls" aria-label="반"></select>
+<button id="attSave" class="acc">저장</button>
+</div>
+<div class="msg" id="attMsg"></div>
+<div class="grid" id="attGrid"></div>
+<div class="card" id="attSent" hidden><h3 style="margin-top:0">자동으로 나간 문자</h3><div id="attSentList"></div></div>
+</section>
+
+<section class="page" id="pg-sms" hidden>
+<h2>문자 보내기</h2>
+<p class="desc">템플릿을 고르고 받을 학생을 체크한 뒤, 미리보기로 확인하고 보냅니다.</p>
+<div class="bar">
+<select id="smsTpl" aria-label="템플릿"></select>
+<select id="smsCls" aria-label="반"></select>
+<button id="smsAll">전체 선택</button>
+</div>
+<div class="grid" id="smsPick"></div>
+<div class="bar"><button id="smsPv">미리보기</button><button id="smsSend" class="acc">보내기</button></div>
+<div class="msg" id="smsMsg"></div>
+<div class="grid" id="smsPvList"></div>
+<div class="card" id="smsDone" hidden><h3 style="margin-top:0">보내기 결과</h3><div id="smsDoneList"></div></div>
+</section>
+
+<section class="page" id="pg-tpl" hidden>
+<h2>템플릿</h2>
+<p class="desc">문자 문구를 만들고 고칩니다. 변수 버튼을 누르면 커서 자리에 들어갑니다.</p>
+<div class="tplwrap">
+<div class="tpllist">
+<button id="tplNew" style="width:100%;margin-bottom:10px">+ 새 템플릿</button>
+<div id="tplList"></div>
+</div>
+<div>
+<input id="tplName" placeholder="템플릿 이름" style="margin-bottom:8px">
+<input id="tplNote" placeholder="메모 (선택)" style="margin-bottom:8px">
+<div class="meta">변수 넣기</div>
+<div id="tplChips"></div>
+<textarea id="tplBody" rows="8" placeholder="문자 내용 — {{이름}}처럼 변수를 넣습니다"></textarea>
+<div class="row" style="margin-top:10px"><select id="tplPvStu" aria-label="미리보기 학생"></select></div>
+<div class="card" id="tplPvCard"><span class="meta">내용을 적으면 미리보기가 나옵니다.</span></div>
+<div class="bar" style="margin-top:10px"><button id="tplSave" class="acc">저장</button><button id="tplDel" class="danger">삭제</button></div>
+<div class="msg" id="tplMsg"></div>
+</div>
+</div>
+</section>
+
+<section class="page" id="pg-var" hidden>
+<h2>변수</h2>
+<p class="desc">템플릿에서 {{이름}}처럼 쓸 값입니다. 맨 아래 표에서 내 변수를 고칩니다.</p>
+<h3>기본 변수</h3>
+<table class="tbl" id="sysVarTbl"></table>
+<h3>학생 정보 변수</h3>
+<p class="meta">학생 탭에 열을 추가하거나 학생·반 페이지에서 값을 넣으면 여기 나타납니다.</p>
+<table class="tbl" id="stuVarTbl"></table>
+<h3>내 변수</h3>
+<div id="usrVarList"></div>
+<button id="varAdd">+ 추가</button>
+<div class="msg" id="varMsg"></div>
+</section>
+
+<section class="page" id="pg-auto" hidden>
+<h2>자동 발송</h2>
+<p class="desc">규칙을 켜 두면 조건에 맞을 때 문자가 저절로 나갑니다.</p>
+<label class="switchline"><input type="checkbox" id="autoRun"><span>자동 발송 켜짐 (5분마다 확인)</span></label>
+<div class="bar">
+<button data-new="결석 저장 즉시">+ 결석 즉시</button>
+<button data-new="지각 저장 즉시">+ 지각 저장 즉시</button>
+<button data-new="시작 후 미출석">+ 지각 N분 자동</button>
+<button data-new="예약 발송">+ 예약 발송</button>
+</div>
+<div class="card" id="autoEdit" hidden>
+<h3 id="autoEditTitle" style="margin-top:0">새 규칙</h3>
+<div class="meta" id="autoEditType" style="margin-bottom:8px"></div>
+<div class="row" id="autoMinutesWrap" hidden><select id="autoMinutes">
+<option value="5">수업 시작 5분 뒤</option><option value="10">수업 시작 10분 뒤</option><option value="15">수업 시작 15분 뒤</option>
+</select></div>
+<div class="row" id="autoTimeWrap" hidden><input type="time" id="autoTime" aria-label="보낼 시각"></div>
+<div id="autoDaysWrap" hidden><div class="meta">보낼 요일 (안 고르면 매일)</div><div class="days" id="autoDays"></div></div>
+<div class="row"><select id="autoCls" aria-label="반"></select><select id="autoTpl" aria-label="템플릿"></select></div>
+<div class="bar"><button id="autoSave" class="acc">규칙 저장</button><button id="autoCancel">취소</button></div>
+<div class="msg" id="autoEditMsg"></div>
+</div>
+<div id="autoList"></div>
+<div class="msg" id="autoMsg"></div>
+</section>
+
+<section class="page" id="pg-stu" hidden>
+<h2>학생·반</h2>
+<p class="desc">반과 학생을 따로 등록하고 고칩니다.</p>
+<h3>반</h3>
+<div id="clsList"></div>
+<button id="clsAdd">+ 반 추가</button>
+<h3>학생</h3>
+<div id="stuList"></div>
+<button id="stuAdd">+ 학생 추가</button>
+<div class="msg" id="stuMsg"></div>
+</section>
+
+<section class="page" id="pg-log" hidden>
+<h2>발송기록·설정</h2>
+<p class="desc">나간 문자 기록을 보고 학원 정보를 고칩니다.</p>
+<h3>발송기록</h3>
+<div class="card"><div id="logList"><span class="meta">페이지를 열면 불러옵니다.</span></div></div>
+<h3>설정</h3>
+<div class="card">
+<div class="row"><label class="meta">학원명<input id="setAcademy" style="margin-top:4px"></label><label class="meta">발신번호<input id="setSender" style="margin-top:4px"></label></div>
+<label class="switchline"><input type="checkbox" id="setSolapi"><span>SOLAPI 사용</span></label>
+<div class="meta" id="setKeys" style="margin-bottom:10px"></div>
+<button id="setSave" class="acc">저장</button>
+</div>
+<div class="msg" id="logMsg"></div>
+</section>
+
+</main>
+<nav id="bnav">
+<button data-nav="att" class="on">출결</button>
+<button data-nav="sms">보내기</button>
+<button data-nav="tpl">템플릿</button>
+<button data-nav="auto">자동</button>
+<button id="moreBtn">더보기</button>
+</nav>
+<div id="more" hidden>
+<button data-nav="stu">학생·반</button>
+<button data-nav="var">변수</button>
+<button data-nav="log">기록·설정</button>
+</div>
+
+<script>
+'use strict';
+var app = null, attRows = [], attStatus = {}, picked = {}, pv = [], pvKey = '';
+var selTpl = null, tplDirty = false, autoDraft = null;
+var DAYS = '월화수목금토일';
+
+function $(i) { return document.getElementById(i); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function errText(e) { return (e && e.message) || String(e); }
+// google.script.run을 Promise로 감싼다. 부르는 함수명은 Code.gs 쪽과 맞춰야 한다.
+function call(fn) {
+  var a = [].slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var r = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function (e) { reject(e); });
+    r[fn].apply(r, a);
+  });
+}
+function msg(id, t, err) { var e = $(id); e.textContent = t || ''; e.className = err ? 'msg err' : 'msg'; }
+function opt(v, t) { return '<option value="' + esc(v) + '">' + esc(t) + '</option>'; }
+function mkDays(val) {
+  var w = document.createElement('div');
+  w.className = 'days';
+  DAYS.split('').forEach(function (d) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip' + (val.indexOf(d) > -1 ? ' on' : '');
+    b.textContent = d;
+    b.onclick = function () { b.classList.toggle('on'); };
+    w.appendChild(b);
+  });
+  return w;
+}
+function daysVal(w) {
+  return [].map.call(w.children, function (b) { return b.classList.contains('on') ? b.textContent : ''; }).join('');
+}
+
+/* ----- 페이지 이동 ----- */
+var PAGES = ['att', 'sms', 'tpl', 'var', 'auto', 'stu', 'log'];
+function go(p) {
+  PAGES.forEach(function (q) { $('pg-' + q).hidden = q !== p; });
+  document.querySelectorAll('[data-nav]').forEach(function (b) {
+    b.classList.toggle('on', b.getAttribute('data-nav') === p);
+  });
+  $('more').hidden = true;
+  if (p === 'att') loadAtt();
+  if (p === 'log') loadLog();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('[data-nav]').forEach(function (b) {
+  b.onclick = function () { go(b.getAttribute('data-nav')); };
+});
+$('moreBtn').onclick = function () { $('more').hidden = !$('more').hidden; };
+
+/* ----- 앱 자료 불러오기 ----- */
+function loadApp(done) {
+  call('getApp').then(function (a) {
+    app = a; pv = []; pvKey = '';
+    if (!$('attDate').value) $('attDate').value = a.today;
+    document.querySelectorAll('.academyName').forEach(function (e) {
+      e.textContent = a.academy || '학원 문자';
+    });
+    fillSelects();
+    if (selTpl === null) selTpl = app.templates.length ? app.templates[0].name : ''; // 처음엔 첫 템플릿을 연다
+    renderTplList();
+    if (!tplDirty) fillTplEditor(); else renderTplChips();
+    renderVars(); renderAuto(); renderStu();
+    $('autoRun').checked = !!a.automationRunning;
+    if (done) done();
+  }).catch(function (e) {
+    msg('attMsg', '불러오지 못했습니다: ' + errText(e), true);
+  });
+}
+function keepVal(sel, html) {
+  var v = sel.value;
+  sel.innerHTML = html;
+  sel.value = v;
+  if (sel.selectedIndex < 0 && sel.options.length) sel.selectedIndex = 0; // 처음 채울 때 빈칸으로 남지 않게
+}
+function fillSelects() {
+  var clsHtml = opt('', '전체 반') + app.classes.map(function (c) { return opt(c.name, c.name); }).join('');
+  keepVal($('attCls'), clsHtml);
+  keepVal($('smsCls'), clsHtml);
+  keepVal($('autoCls'), clsHtml);
+  keepVal($('smsTpl'), app.templates.map(function (t) { return opt(t.name, t.name); }).join(''));
+  keepVal($('autoTpl'), app.templates.map(function (t) { return opt(t.name, t.name); }).join(''));
+  keepVal($('tplPvStu'), opt('', '학생 없이 미리보기') + app.students.map(function (s) {
+    return opt(s.name, s.name + (s.cls ? ' · ' + s.cls : ''));
+  }).join(''));
+  renderSmsPick();
+}
+
+/* ----- 오늘 출결 ----- */
+function loadAtt(quiet) {
+  if (!app) return;
+  if (!quiet) msg('attMsg', '불러오는 중…');
+  call('getAttendance', $('attDate').value || app.today, $('attCls').value).then(function (list) {
+    attRows = list || []; attStatus = {};
+    attRows.forEach(function (r) { attStatus[r.name] = r.status || null; });
+    renderAtt();
+    msg('attMsg', attRows.length ? '' : '이 날짜에 수업이 있는 학생이 없습니다.');
+  }).catch(function (e) { msg('attMsg', errText(e), true); });
+}
+function renderAtt() {
+  var g = $('attGrid');
+  g.innerHTML = '';
+  attRows.forEach(function (r) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = '<h3 style="margin:0 0 2px">' + esc(r.name) + '</h3><div class="meta">' +
+      esc(r.cls || '반 없음') + (r.start ? ' · ' + esc(r.start) + ' 시작' : '') +
+      (r.at ? ' · ' + esc(r.at) + ' 체크' : '') + '</div>';
+    var row = document.createElement('div');
+    row.className = 'st';
+    ['등원', '지각', '결석'].forEach(function (st) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = st;
+      if (attStatus[r.name] === st) b.className = 'on';
+      b.onclick = function () { attStatus[r.name] = (attStatus[r.name] === st ? null : st); renderAtt(); };
+      row.appendChild(b);
+    });
+    card.appendChild(row);
+    g.appendChild(card);
+  });
+}
+$('attSave').onclick = function () {
+  var recs = attRows.filter(function (r) { return attStatus[r.name]; }).map(function (r) {
+    return { name: r.name, status: attStatus[r.name] };
+  });
+  if (!recs.length) { msg('attMsg', '등원·지각·결석 표시가 없습니다.', true); return; }
+  var btn = this;
+  btn.disabled = true;
+  call('saveAttendance', $('attDate').value || app.today, recs).then(function (r) {
+    btn.disabled = false;
+    var list = (r && r.sent) || [];
+    msg('attMsg', '저장 완료 — ' + (list.length ? '자동 문자 ' + list.length + '건 처리' : '자동 문자 없음') +
+      (r && r.note ? ' · ' + r.note : ''));
+    $('attSent').hidden = !list.length;
+    $('attSentList').innerHTML = list.map(function (x) {
+      return '<div class="line"><b>' + esc(x.name) + '</b> · ' + esc(x.template) + ' → ' + esc(x.result) + '</div>';
+    }).join('');
+    loadAtt(true);
+  }).catch(function (e) { btn.disabled = false; msg('attMsg', errText(e), true); });
+};
+$('attDate').onchange = function () { loadAtt(); };
+$('attCls').onchange = function () { loadAtt(); };
+
+/* ----- 문자 보내기 ----- */
+function renderSmsPick() {
+  var cls = $('smsCls').value, g = $('smsPick');
+  g.innerHTML = '';
+  var list = app.students.filter(function (s) { return !cls || s.cls === cls; });
+  if (!list.length) { g.innerHTML = '<div class="card meta">학생이 없습니다. 학생·반 페이지에서 추가하세요.</div>'; return; }
+  list.forEach(function (s) {
+    var lab = document.createElement('label');
+    lab.className = 'card pick';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!picked[s.name];
+    cb.onchange = function () { picked[s.name] = cb.checked; };
+    lab.appendChild(cb);
+    var t = document.createElement('span');
+    t.innerHTML = '<b>' + esc(s.name) + '</b> <span class="meta">' + esc(s.cls || '') +
+      (s.phoneMasked ? ' · ' + esc(s.phoneMasked) : '') + '</span>';
+    lab.appendChild(t);
+    g.appendChild(lab);
+  });
+}
+$('smsCls').onchange = renderSmsPick;
+$('smsAll').onclick = function () {
+  var cls = $('smsCls').value;
+  var list = app.students.filter(function (s) { return !cls || s.cls === cls; });
+  var allOn = list.length > 0 && list.every(function (s) { return picked[s.name]; });
+  list.forEach(function (s) { picked[s.name] = !allOn; });
+  renderSmsPick();
+};
+function smsNames() {
+  var cls = $('smsCls').value; // 화면에 보이는 반 안에서만 고른다
+  return app.students.filter(function (s) { return picked[s.name] && (!cls || s.cls === cls); }).map(function (s) { return s.name; });
+}
+function renderSmsPv() {
+  var g = $('smsPvList');
+  g.innerHTML = '';
+  pv.forEach(function (p) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    var html = '<h3 style="margin:0 0 2px">' + esc(p.name) + '</h3><div class="meta">' + esc(p.phoneMasked || '') + '</div>' +
+      '<div class="body-text">' + esc(p.text) + '</div>' +
+      '<span class="badge">' + p.bytes + 'B</span>' +
+      '<span class="badge ' + (p.type === 'LMS' ? 'b-lms' : 'b-sms') + '">' + esc(p.type) + '</span>';
+    if (p.duplicate) html += '<span class="badge b-dup">오늘 이미 보냄</span>';
+    if (p.missing && p.missing.length) {
+      html += '<div class="warnline">빈 변수 ' + p.missing.map(function (m) {
+        return esc('{{' + m + '}}');
+      }).join(' ') + ' — 값이 없으면 이 문자는 보류됩니다</div>';
+    }
+    card.innerHTML = html;
+    g.appendChild(card);
+  });
+}
+$('smsPv').onclick = function () {
+  var tpl = $('smsTpl').value, names = smsNames();
+  if (!tpl) { msg('smsMsg', '템플릿 페이지에서 템플릿을 먼저 만드세요.', true); return; }
+  if (!names.length) { msg('smsMsg', '받을 학생을 골라 주세요.', true); return; }
+  var btn = this;
+  btn.disabled = true;
+  call('previewMessages', tpl, names).then(function (list) {
+    btn.disabled = false;
+    pv = list || [];
+    pvKey = tpl + '|' + names.join('|');
+    renderSmsPv();
+    $('smsDone').hidden = true;
+    msg('smsMsg', '미리보기 ' + pv.length + '건 — 내용을 확인한 뒤 보내세요.');
+  }).catch(function (e) { btn.disabled = false; msg('smsMsg', errText(e), true); });
+};
+$('smsSend').onclick = function () {
+  var tpl = $('smsTpl').value, names = smsNames();
+  if (!pv.length || pvKey !== tpl + '|' + names.join('|')) {
+    msg('smsMsg', '미리보기를 먼저 눌러 주세요. 받는 사람·템플릿을 바꾸면 다시 누릅니다.', true);
+    return;
+  }
+  var skip = pv.filter(function (p) { return p.duplicate || (p.missing && p.missing.length); }).length;
+  var n = pv.length - skip;
+  if (!window.confirm('총 ' + pv.length + '건 중 ' + n + '건을 보낼까요?' + (skip ? ' (중복·보류 ' + skip + '건 건너뜀)' : ''))) return;
+  var btn = this;
+  btn.disabled = true;
+  call('sendMessages', tpl, names).then(function (list) {
+    btn.disabled = false;
+    list = list || [];
+    $('smsDone').hidden = !list.length;
+    $('smsDoneList').innerHTML = list.map(function (x) {
+      return '<div class="line"><b>' + esc(x.name) + '</b> → ' + esc(x.result) + '</div>';
+    }).join('');
+    msg('smsMsg', '보내기 완료 — ' + list.length + '건 처리했습니다.');
+    pv = []; pvKey = '';
+    $('smsPvList').innerHTML = '';
+  }).catch(function (e) { btn.disabled = false; msg('smsMsg', errText(e), true); });
+};
+
+/* ----- 템플릿 ----- */
+function renderTplList() {
+  var g = $('tplList');
+  g.innerHTML = '';
+  app.templates.forEach(function (t) {
+    var c = document.createElement('div');
+    c.className = 'card' + (selTpl === t.name ? ' on' : '');
+    c.innerHTML = '<b>' + esc(t.name) + '</b><div class="meta">' +
+      esc(t.note || (t.body || '').slice(0, 40)) + '</div>';
+    c.onclick = function () { selTpl = t.name; fillTplEditor(); renderTplList(); };
+    g.appendChild(c);
+  });
+}
+function fillTplEditor() {
+  var t = null;
+  app.templates.forEach(function (x) { if (x.name === selTpl) t = x; });
+  $('tplName').value = t ? t.name : '';
+  $('tplNote').value = t ? t.note : '';
+  $('tplBody').value = t ? t.body : '';
+  $('tplDel').disabled = !t;
+  tplDirty = false;
+  renderTplChips();
+  scheduleTplPv();
+}
+function renderTplChips() {
+  var g = $('tplChips');
+  g.innerHTML = '';
+  [['기본', (app.systemVariables || []).map(function (v) { return v.name; })],
+   ['학생 정보', app.studentColumns || []],
+   ['내 변수', (app.variables || []).map(function (v) { return v.name; })]].forEach(function (pair) {
+    var lbl = document.createElement('div');
+    lbl.className = 'meta';
+    lbl.textContent = pair[0];
+    g.appendChild(lbl);
+    var row = document.createElement('div');
+    row.className = 'chips';
+    pair[1].forEach(function (n) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.textContent = '{{' + n + '}}';
+      b.onclick = function () { insertVar(n); };
+      row.appendChild(b);
+    });
+    if (!pair[1].length) row.innerHTML = '<span class="meta">없음</span>';
+    g.appendChild(row);
+  });
+}
+function insertVar(n) {
+  var ta = $('tplBody'), t = '{{' + n + '}}';
+  var s = ta.selectionStart || 0, e = ta.selectionEnd || 0;
+  ta.value = ta.value.slice(0, s) + t + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + t.length;
+  ta.focus();
+  tplDirty = true;
+  scheduleTplPv();
+}
+var tplPvT = null;
+function scheduleTplPv() { clearTimeout(tplPvT); tplPvT = setTimeout(runTplPv, 300); }
+function runTplPv() {
+  var body = $('tplBody').value, card = $('tplPvCard');
+  if (!body.trim()) { card.innerHTML = '<span class="meta">내용을 적으면 미리보기가 나옵니다.</span>'; return; }
+  call('previewTemplate', body, $('tplPvStu').value || null).then(function (r) {
+    var html = '<div class="body-text">' + esc(r.text) + '</div>' +
+      '<span class="badge">' + r.bytes + 'B</span>' +
+      '<span class="badge ' + (r.type === 'LMS' ? 'b-lms' : 'b-sms') + '">' + esc(r.type) + '</span>';
+    if (r.missing && r.missing.length) {
+      html += '<div class="warnline">빈 변수 ' + r.missing.map(function (m) {
+        return esc('{{' + m + '}}');
+      }).join(' ') + ' — 값이 없으면 자동 발송은 보류됩니다</div>';
+    }
+    card.innerHTML = html;
+  }).catch(function (e) { card.innerHTML = '<span class="err">' + esc(errText(e)) + '</span>'; });
+}
+$('tplBody').addEventListener('input', function () { tplDirty = true; scheduleTplPv(); });
+$('tplName').addEventListener('input', function () { tplDirty = true; });
+$('tplNote').addEventListener('input', function () { tplDirty = true; });
+$('tplPvStu').onchange = scheduleTplPv;
+$('tplNew').onclick = function () { selTpl = ''; fillTplEditor(); renderTplList(); };
+$('tplSave').onclick = function () {
+  var name = $('tplName').value.trim(), body = $('tplBody').value;
+  if (!name) { msg('tplMsg', '이름을 적어 주세요.', true); return; }
+  var btn = this;
+  btn.disabled = true;
+  call('saveTemplate', { name: name, body: body, note: $('tplNote').value, originalName: selTpl || null })
+    .then(function () { btn.disabled = false; selTpl = name; tplDirty = false; msg('tplMsg', '저장했습니다.'); loadApp(); })
+    .catch(function (e) { btn.disabled = false; msg('tplMsg', errText(e), true); });
+};
+$('tplDel').onclick = function () {
+  if (!selTpl) return;
+  if (!window.confirm('템플릿 「' + selTpl + '」을 지울까요?')) return;
+  call('deleteTemplate', selTpl)
+    .then(function () { selTpl = ''; loadApp(); })
+    .catch(function (e) { msg('tplMsg', errText(e), true); });
+};
+
+/* ----- 변수 ----- */
+function renderVars() {
+  $('sysVarTbl').innerHTML = '<tr><th>변수</th><th>설명</th></tr>' + (app.systemVariables || []).map(function (v) {
+    return '<tr><td>{{' + esc(v.name) + '}}</td><td class="meta">' + esc(v.desc || '') + '</td></tr>';
+  }).join('');
+  $('stuVarTbl').innerHTML = '<tr><th>변수</th><th>설명</th></tr>' + ((app.studentColumns || []).map(function (c) {
+    return '<tr><td>{{' + esc(c) + '}}</td><td class="meta">학생 탭의 「' + esc(c) + '」열 값</td></tr>';
+  }).join('') || '<tr><td class="meta">없음</td><td></td></tr>');
+  var g = $('usrVarList');
+  g.innerHTML = '';
+  (app.variables || []).forEach(function (v) { g.appendChild(varRow(v)); });
+  if (!(app.variables || []).length) {
+    g.innerHTML = '<div class="meta" style="margin-bottom:8px">아직 내 변수가 없습니다.</div>';
+  }
+}
+function varRow(v) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = '<div class="row"><input class="vname" placeholder="이름" value="' + esc(v.name || '') +
+    '"><input class="vval" placeholder="값" value="' + esc(v.value || '') +
+    '"><input class="vnote" placeholder="메모" value="' + esc(v.note || '') + '"></div>';
+  var bar = document.createElement('div');
+  bar.className = 'bar';
+  var sv = document.createElement('button');
+  sv.textContent = '저장';
+  sv.className = 'acc';
+  var dl = document.createElement('button');
+  dl.textContent = '삭제';
+  dl.className = 'danger';
+  sv.onclick = function () {
+    var name = card.querySelector('.vname').value.trim();
+    if (!name) { msg('varMsg', '이름을 적어 주세요.', true); return; }
+    call('saveVariable', {
+      name: name,
+      value: card.querySelector('.vval').value,
+      note: card.querySelector('.vnote').value,
+      originalName: v.name || null
+    }).then(function () { msg('varMsg', '저장했습니다.'); loadApp(); })
+      .catch(function (e) { msg('varMsg', errText(e), true); });
+  };
+  dl.onclick = function () {
+    if (!v.name) { card.remove(); return; }
+    if (!window.confirm('변수 「' + v.name + '」을 지울까요?')) return;
+    call('deleteVariable', v.name).then(function () { loadApp(); })
+      .catch(function (e) { msg('varMsg', errText(e), true); });
+  };
+  bar.appendChild(sv); bar.appendChild(dl);
+  card.appendChild(bar);
+  return card;
+}
+$('varAdd').onclick = function () { $('usrVarList').appendChild(varRow({})); };
+
+/* ----- 자동 발송 ----- */
+function renderAuto() {
+  var g = $('autoList');
+  g.innerHTML = '';
+  if (!(app.automations || []).length) {
+    g.innerHTML = '<div class="meta" style="margin-bottom:10px">규칙이 없습니다. 위 버튼으로 추가하세요.</div>';
+  }
+  (app.automations || []).forEach(function (a) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    var top = document.createElement('div');
+    top.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px;align-items:center';
+    var tog = document.createElement('input');
+    tog.type = 'checkbox';
+    tog.checked = !!a.on;
+    tog.style.cssText = 'width:24px;height:24px;min-height:0;margin:0;flex:none';
+    tog.onchange = function () {
+      call('saveAutomation', {
+        row: a.row, on: tog.checked, type: a.type, minutes: a.minutes,
+        time: a.time, days: a.days, cls: a.cls, template: a.template
+      }).then(function () { loadApp(); })
+        .catch(function (e) { tog.checked = !tog.checked; msg('autoMsg', errText(e), true); });
+    };
+    var txt = document.createElement('div');
+    txt.style.cssText = 'flex:1 1 220px;min-width:0'; // 좁은 화면에선 버튼이 아랫줄로
+    txt.textContent = a.sentence || '';
+    var ed = document.createElement('button');
+    ed.textContent = '고치기';
+    ed.style.minHeight = '36px';
+    ed.onclick = function () { openAutoEdit(a); };
+    var del = document.createElement('button');
+    del.textContent = '삭제';
+    del.className = 'danger';
+    del.style.minHeight = '36px';
+    del.onclick = function () {
+      if (!window.confirm('이 규칙을 지울까요?')) return;
+      call('deleteAutomation', a.row).then(function () { loadApp(); })
+        .catch(function (e) { msg('autoMsg', errText(e), true); });
+    };
+    top.appendChild(tog); top.appendChild(txt); top.appendChild(ed); top.appendChild(del);
+    card.appendChild(top);
+    g.appendChild(card);
+  });
+}
+function openAutoEdit(a) {
+  autoDraft = a;
+  $('autoEdit').hidden = false;
+  $('autoEditTitle').textContent = a.row ? '규칙 고치기' : '새 규칙';
+  $('autoEditType').textContent = '종류: ' + a.type;
+  $('autoMinutesWrap').hidden = a.type !== '시작 후 미출석';
+  $('autoTimeWrap').hidden = a.type !== '예약 발송';
+  $('autoDaysWrap').hidden = a.type !== '예약 발송';
+  $('autoMinutes').value = String(a.minutes || 10);
+  $('autoTime').value = a.time || '18:00';
+  setDays($('autoDays'), a.days || '');
+  $('autoCls').value = a.cls || '';
+  if (a.template) $('autoTpl').value = a.template;
+  msg('autoEditMsg', '');
+  $('autoEdit').scrollIntoView({ block: 'nearest' });
+}
+function setDays(w, v) {
+  [].forEach.call(w.children, function (b) {
+    b.classList.toggle('on', v.indexOf(b.textContent) > -1);
+  });
+}
+document.querySelectorAll('[data-new]').forEach(function (b) {
+  b.onclick = function () {
+    openAutoEdit({ row: null, on: true, type: b.getAttribute('data-new'), minutes: 10, time: '18:00', days: '', cls: '', template: $('autoTpl').value });
+  };
+});
+$('autoSave').onclick = function () {
+  var tpl = $('autoTpl').value;
+  if (!tpl) { msg('autoEditMsg', '템플릿 페이지에서 템플릿을 먼저 만드세요.', true); return; }
+  var a = {
+    row: autoDraft.row || null, on: autoDraft.on !== false, type: autoDraft.type,
+    minutes: null, time: null, days: '', cls: $('autoCls').value, template: tpl
+  };
+  if (a.type === '시작 후 미출석') a.minutes = parseInt($('autoMinutes').value, 10);
+  if (a.type === '예약 발송') { a.time = $('autoTime').value; a.days = daysVal($('autoDays')); }
+  $('autoEdit').hidden = true;
+  call('saveAutomation', a).then(function () { msg('autoMsg', '저장했습니다.'); loadApp(); })
+    .catch(function (e) { msg('autoMsg', errText(e), true); });
+};
+$('autoCancel').onclick = function () { $('autoEdit').hidden = true; };
+$('autoRun').onchange = function () {
+  var on = this.checked, cb = this;
+  call('setAutomationRunning', on).then(function (r) {
+    cb.checked = !!(r && r.automationRunning);
+  }).catch(function (e) { cb.checked = !on; msg('autoMsg', errText(e), true); });
+};
+
+/* ----- 학생·반 ----- */
+function renderStu() {
+  var g = $('clsList');
+  g.innerHTML = '';
+  app.classes.forEach(function (c) { g.appendChild(clsRow(c)); });
+  if (!app.classes.length) g.innerHTML = '<div class="meta" style="margin-bottom:8px">반이 없습니다.</div>';
+  var s = $('stuList');
+  s.innerHTML = '';
+  app.students.forEach(function (st) { s.appendChild(stuRow(st)); });
+  if (!app.students.length) s.innerHTML = '<div class="meta" style="margin-bottom:8px">학생이 없습니다.</div>';
+}
+function clsRow(c) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = '<div class="row"><input class="cname" placeholder="반 이름" value="' + esc(c.name || '') +
+    '"><input class="cstart" type="time" value="' + esc(c.start || '') + '" aria-label="수업 시작 시각"></div>';
+  var days = mkDays(c.days || '');
+  card.appendChild(days);
+  var bar = document.createElement('div');
+  bar.className = 'bar';
+  var sv = document.createElement('button');
+  sv.textContent = '저장';
+  sv.className = 'acc';
+  var dl = document.createElement('button');
+  dl.textContent = '삭제';
+  dl.className = 'danger';
+  sv.onclick = function () {
+    var name = card.querySelector('.cname').value.trim();
+    if (!name) { msg('stuMsg', '반 이름을 적어 주세요.', true); return; }
+    call('saveClass', {
+      name: name, days: daysVal(days),
+      start: card.querySelector('.cstart').value, originalName: c.name || null
+    }).then(function () { msg('stuMsg', '저장했습니다.'); loadApp(); })
+      .catch(function (e) { msg('stuMsg', errText(e), true); });
+  };
+  dl.onclick = function () {
+    if (!c.name) { card.remove(); return; }
+    if (!window.confirm('반 「' + c.name + '」을 지울까요?')) return;
+    call('deleteClass', c.name).then(function () { loadApp(); })
+      .catch(function (e) { msg('stuMsg', errText(e), true); });
+  };
+  bar.appendChild(sv); bar.appendChild(dl);
+  card.appendChild(bar);
+  return card;
+}
+function stuRow(st) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  var clsHtml = '<option value="">반 없음</option>' + app.classes.map(function (c) {
+    return '<option' + (c.name === st.cls ? ' selected' : '') + '>' + esc(c.name) + '</option>';
+  }).join('');
+  var extra = (app.studentColumns || []).map(function (c) {
+    return '<input class="f" data-col="' + esc(c) + '" placeholder="' + esc(c) + '" value="' +
+      esc((st.fields || {})[c] || '') + '">';
+  }).join('');
+  card.innerHTML = '<div class="row"><input class="sname" placeholder="이름" value="' + esc(st.name || '') +
+    '"><select class="scls">' + clsHtml + '</select><input class="sphone" placeholder="학부모번호" value="' +
+    esc(st.phone || '') + '"></div>' + (extra ? '<div class="row">' + extra + '</div>' : '');
+  var bar = document.createElement('div');
+  bar.className = 'bar';
+  var sv = document.createElement('button');
+  sv.textContent = '저장';
+  sv.className = 'acc';
+  var dl = document.createElement('button');
+  dl.textContent = '삭제';
+  dl.className = 'danger';
+  sv.onclick = function () {
+    var name = card.querySelector('.sname').value.trim();
+    if (!name) { msg('stuMsg', '이름을 적어 주세요.', true); return; }
+    var fields = {};
+    card.querySelectorAll('.f').forEach(function (i) { fields[i.getAttribute('data-col')] = i.value; });
+    call('saveStudent', {
+      name: name, cls: card.querySelector('.scls').value,
+      phone: card.querySelector('.sphone').value, fields: fields, originalName: st.name || null
+    }).then(function () { msg('stuMsg', '저장했습니다.'); loadApp(); })
+      .catch(function (e) { msg('stuMsg', errText(e), true); });
+  };
+  dl.onclick = function () {
+    if (!st.name) { card.remove(); return; }
+    if (!window.confirm('학생 ' + st.name + '을 지울까요?')) return;
+    call('deleteStudent', st.name).then(function () { loadApp(); })
+      .catch(function (e) { msg('stuMsg', errText(e), true); });
+  };
+  bar.appendChild(sv); bar.appendChild(dl);
+  card.appendChild(bar);
+  return card;
+}
+$('clsAdd').onclick = function () { $('clsList').appendChild(clsRow({})); };
+$('stuAdd').onclick = function () { $('stuList').appendChild(stuRow({ fields: {} })); };
+
+/* ----- 발송기록·설정 ----- */
+function loadLog() {
+  if (!app) return;
+  call('getLog', 100).then(function (list) {
+    list = list || [];
+    $('logList').innerHTML = list.length ? list.map(function (x) {
+      return '<div class="line"><span class="meta">' + esc(x.at || '') + '</span> <b>' + esc(x.name) + '</b> ' +
+        '<span class="meta">' + esc(x.phoneMasked || '') + '</span><br><span class="meta">' + esc(x.template) +
+        '</span> · ' + esc(x.result) +
+        '<div class="body-text" style="margin:4px 0 0">' + esc(x.text || '') + '</div></div>';
+    }).join('') : '<span class="meta">아직 나간 문자가 없습니다.</span>';
+  }).catch(function (e) {
+    $('logList').innerHTML = '<span class="err">' + esc(errText(e)) + '</span>';
+  });
+  $('setAcademy').value = app.settings.academy || '';
+  $('setSender').value = app.settings.sender || '';
+  $('setSolapi').checked = !!app.settings.solapiOn;
+  $('setKeys').textContent = app.settings.keysSet
+    ? 'SOLAPI 키가 저장되어 있습니다.'
+    : '키가 없습니다 — Apps Script 프로젝트 설정 → 스크립트 속성에 SOLAPI_KEY·SOLAPI_SECRET을 넣으세요.';
+}
+$('setSave').onclick = function () {
+  call('saveSettings', {
+    academy: $('setAcademy').value, sender: $('setSender').value, solapiOn: $('setSolapi').checked
+  }).then(function () { msg('logMsg', '저장했습니다.'); loadApp(); })
+    .catch(function (e) { msg('logMsg', errText(e), true); });
+};
+
+/* ----- 시작 ----- */
+$('autoDays').appendChild(document.createElement('span'));
+(function () {
+  var w = mkDays('');
+  $('autoDays').innerHTML = w.innerHTML;
+  [].forEach.call($('autoDays').children, function (b) {
+    b.onclick = function () { b.classList.toggle('on'); };
+  });
+})();
+if (typeof google === 'undefined' || !google.script || !google.script.run) {
+  document.querySelector('main').insertAdjacentHTML('afterbegin',
+    '<div class="card err">앱스 스크립트 웹앱 주소로 열어야 움직입니다.</div>');
+} else {
+  loadApp(function () { loadAtt(); });
+}
+</script>
+</body>
+</html>

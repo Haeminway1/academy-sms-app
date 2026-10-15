@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>화면 미리보기 · 학원 문자</title>
+<style>
+html,body{height:100%}
+body{display:flex;flex-direction:column;margin:0;background:#0f1014;color:#cfd2d8;font:15px/1.5 'Apple SD Gothic Neo','Malgun Gothic',sans-serif}
+.bar{padding:10px 14px;border-bottom:1px solid #2a2d35;font-size:14px;color:#9aa0ab}
+.bar b{color:#e9e9ec}
+iframe{display:block;width:100%;flex:1;min-height:0;border:0;background:#15161a}
+.fail{padding:16px;color:#e06565}
+</style>
+</head>
+<body>
+<div class="bar"><b>화면 미리보기</b> — 예시 자료(홍길동·김해민·오태식·장첸)로만 움직입니다. 실제 문자는 나가지 않습니다. 같은 폴더에서 <code>python3 -m http.server</code>로 띄운 뒤 preview.html을 여세요.</div>
+<iframe id="frame" title="학원 문자 화면"></iframe>
+
+<script id="gasStub">
+// 웹앱 환경의 google.script.run을 흉내 낸다. 예시 자료로만 답하며 실제 발송은 없다.
+(function () {
+  var d = new Date();
+  var today = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  var now = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  var DAYCHARS = '일월화수목금토일';
+
+  var classes = [
+    { name: '중2A', days: '월수금', start: '16:00' },
+    { name: '중3B', days: '화목토', start: '17:00' }
+  ];
+  var studentColumns = ['메모', '다음시험'];
+  var students = [
+    { name: '홍길동', cls: '중2A', phone: '01012345678', fields: { '메모': '', '다음시험': '11월 모의고사' } },
+    { name: '김해민', cls: '중2A', phone: '01098765432', fields: { '메모': '형제 할인', '다음시험': '11월 모의고사' } },
+    { name: '오태식', cls: '중3B', phone: '01055556677', fields: { '메모': '', '다음시험': '' } },
+    { name: '장첸', cls: '중3B', phone: '01088889999', fields: { '메모': '', '다음시험': '' } }
+  ];
+  var templates = [
+    { name: '결석 안내', body: '[{{학원명}}] {{이름}} 학생이 오늘({{날짜}}) {{반}} 수업에 결석했습니다.', note: '결석 저장 즉시용' },
+    { name: '지각 안내', body: '[{{학원명}}] {{이름}} 학생이 {{반}} {{수업시작}} 수업에 지각했습니다.', note: '지각·미출석용' },
+    { name: '시험 안내', body: '[{{학원명}}] {{이름}} 학생 {{다음시험}} 일정을 알려 드립니다. 문의 {{학원전화}}', note: '' },
+    { name: '보강 안내', body: '[{{학원명}}] {{보강안내}}', note: '내 변수 예시' }
+  ];
+  var variables = [
+    { name: '학원전화', value: '02-123-4567', note: '학원 대표 번호' },
+    { name: '보강안내', value: '이번 주 토요일 오후 2시에 보강이 있습니다.', note: '보강 문구' }
+  ];
+  var systemVariables = [
+    { name: '이름', desc: '학생 이름' },
+    { name: '반', desc: '학생이 속한 반 이름' },
+    { name: '날짜', desc: '오늘 날짜' },
+    { name: '시각', desc: '지금 시각' },
+    { name: '상태', desc: '오늘 출결 상태(등원·지각·결석)' },
+    { name: '수업시작', desc: '반 수업 시작 시각' },
+    { name: '학원명', desc: '설정의 학원 이름' }
+  ];
+  var automations = [
+    { row: 2, on: true, type: '결석 저장 즉시', minutes: null, time: null, days: '', cls: '', template: '결석 안내' },
+    { row: 3, on: true, type: '지각 저장 즉시', minutes: null, time: null, days: '', cls: '', template: '지각 안내' },
+    { row: 4, on: false, type: '시작 후 미출석', minutes: 10, time: null, days: '', cls: '중2A', template: '지각 안내' }
+  ];
+  var nextRow = 5;
+  var automationRunning = true;
+  var settings = { academy: '해민 영어학원', sender: '01011112222', solapiOn: false, keysSet: false };
+  var att = {};            // att[dateStr][name] = '등원'|'지각'|'결석'
+  var sentKeys = {};       // '학생|템플릿' -> true (중복 건너뜀)
+  sentKeys['홍길동|결석 안내'] = 1;
+  var log = [];
+
+  function find(name) {
+    for (var i = 0; i < students.length; i++) if (students[i].name === name) return students[i];
+    return null;
+  }
+  function findCls(name) {
+    for (var i = 0; i < classes.length; i++) if (classes[i].name === name) return classes[i];
+    return null;
+  }
+  function tplBody(name) {
+    for (var i = 0; i < templates.length; i++) if (templates[i].name === name) return templates[i].body;
+    return '';
+  }
+  function fill(t, v) {
+    var miss = [];
+    var out = String(t || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, function (m, k) {
+      k = k.trim();
+      if (v[k] === undefined || v[k] === '') {
+        if (miss.indexOf(k) === -1) miss.push(k);
+        return m;
+      }
+      return v[k];
+    });
+    return { text: out, missing: miss };
+  }
+  function bytes(s) {
+    var n = 0;
+    for (var i = 0; i < s.length; i++) n += s.charCodeAt(i) > 127 ? 2 : 1;
+    return n;
+  }
+  function mask(p) { return p && p.length > 7 ? p.slice(0, 3) + '****' + p.slice(-4) : p; }
+  function varsOf(s, dateStr) {
+    var v = {
+      '학원명': settings.academy, '날짜': dateStr || today, '시각': now,
+      '이름': s.name, '반': s.cls, '학부모번호': s.phone,
+      '수업시작': (findCls(s.cls) || {}).start || '',
+      '상태': ((att[dateStr || today] || {})[s.name]) || ''
+    };
+    studentColumns.forEach(function (c) { v[c] = (s.fields || {})[c] || ''; });
+    variables.forEach(function (x) { v[x.name] = x.value; });
+    return v;
+  }
+  function sentence(a) {
+    var t = '「' + a.template + '」';
+    if (a.type === '결석 저장 즉시') return (a.cls ? a.cls + ' ' : '') + '학생이 결석으로 저장되면 ' + t + '을 보냅니다';
+    if (a.type === '지각 저장 즉시') return (a.cls ? a.cls + ' ' : '') + '학생이 지각으로 저장되면 ' + t + '을 보냅니다';
+    if (a.type === '시작 후 미출석') return (a.cls || '전체 반') + ' 수업 시작 ' + (a.minutes || 0) + '분 뒤에도 출석이 없으면 ' + t + '을 보냅니다';
+    if (a.type === '예약 발송') return (a.days ? '매주 ' + a.days + ' ' : '매일 ') + (a.time || '') + ' ' + (a.cls ? a.cls + ' 학생에게' : '전체 학생에게') + ' ' + t + '을 보냅니다';
+    return a.type || '';
+  }
+  function dup(arr, name, what) {
+    for (var i = 0; i < arr.length; i++) if (arr[i].name === name && name !== what) throw new Error('같은 이름이 이미 있습니다.');
+  }
+  function pushLog(name, template, text, result) {
+    var s = find(name) || { phone: '' };
+    log.unshift({ at: today + ' ' + now, name: name, phoneMasked: mask(s.phone), template: template, text: text, result: result });
+  }
+  function autoSend(s, template, dateStr) {
+    var key = s.name + '|' + template;
+    if (sentKeys[key]) return { name: s.name, template: template, result: '중복 건너뜀' };
+    var f = fill(tplBody(template), varsOf(s, dateStr));
+    var result = '시험(미발송)';
+    if (f.missing.length) result = '보류: 빈 변수 ' + f.missing.join(',');
+    else sentKeys[key] = 1;
+    pushLog(s.name, template, f.text, result);
+    return { name: s.name, template: template, result: result };
+  }
+
+  var api = {
+    getApp: function () {
+      return {
+        academy: settings.academy, today: today, weekday: d.getDay(),
+        classes: classes.map(function (c) { return { name: c.name, days: c.days, start: c.start }; }),
+        students: students.map(function (s) {
+          var f = {};
+          for (var k in (s.fields || {})) f[k] = s.fields[k];
+          return { name: s.name, cls: s.cls, phone: s.phone, phoneMasked: mask(s.phone), fields: f };
+        }),
+        studentColumns: studentColumns.slice(),
+        templates: templates.map(function (t) { return { name: t.name, body: t.body, note: t.note }; }),
+        variables: variables.map(function (v) { return { name: v.name, value: v.value, note: v.note }; }),
+        systemVariables: systemVariables.map(function (v) { return { name: v.name, desc: v.desc }; }),
+        automations: automations.map(function (a) {
+          var c = {};
+          for (var k in a) c[k] = a[k];
+          c.sentence = sentence(c);
+          return c;
+        }),
+        automationRunning: automationRunning,
+        settings: { academy: settings.academy, sender: settings.sender, solapiOn: settings.solapiOn, keysSet: settings.keysSet }
+      };
+    },
+    getAttendance: function (dateStr, cls) {
+      var ds = dateStr || today;
+      var wd = DAYCHARS[new Date(ds + 'T00:00:00').getDay()];
+      var dayAtt = att[ds] || {};
+      return students.filter(function (s) {
+        if (cls && s.cls !== cls) return false;
+        var c = findCls(s.cls);
+        return !c || c.days.indexOf(wd) > -1;
+      }).map(function (s) {
+        var c = findCls(s.cls);
+        return { name: s.name, cls: s.cls, start: c ? c.start : '', status: dayAtt[s.name] || null, at: dayAtt[s.name] ? ds + ' ' + now : '' };
+      });
+    },
+    saveAttendance: function (dateStr, records) {
+      var ds = dateStr || today;
+      if (!att[ds]) att[ds] = {};
+      var sent = [];
+      (records || []).forEach(function (r) {
+        var s = find(r.name);
+        if (!s) return;
+        att[ds][r.name] = r.status;
+        if (!automationRunning) return;
+        automations.forEach(function (a) {
+          if (!a.on) return;
+          if (a.cls && s.cls !== a.cls) return;
+          if ((a.type === '결석 저장 즉시' && r.status === '결석') ||
+              (a.type === '지각 저장 즉시' && r.status === '지각')) {
+            sent.push(autoSend(s, a.template, ds));
+          }
+        });
+      });
+      return { ok: true, sent: sent, note: automationRunning ? '' : '자동 발송 꺼짐' };
+    },
+    saveClass: function (c) {
+      if (!c || !c.name) throw new Error('반 이름이 없습니다.');
+      var orig = c.originalName || c.name, cur = null;
+      classes.forEach(function (x) { if (x.name === orig) cur = x; });
+      if (!cur && c.originalName) throw new Error('반을 찾지 못했습니다.');
+      if (!cur) { cur = {}; classes.push(cur); }
+      dup(classes, c.name, orig);
+      cur.name = c.name; cur.days = c.days || ''; cur.start = c.start || '';
+      if (c.originalName && c.originalName !== c.name) {
+        students.forEach(function (s) { if (s.cls === c.originalName) s.cls = c.name; });
+      }
+      return { name: cur.name, days: cur.days, start: cur.start };
+    },
+    deleteClass: function (name) {
+      classes = classes.filter(function (c) { return c.name !== name; });
+      students.forEach(function (s) { if (s.cls === name) s.cls = ''; });
+      return { ok: true };
+    },
+    saveStudent: function (st) {
+      if (!st || !st.name) throw new Error('이름이 없습니다.');
+      var orig = st.originalName || st.name, s = find(orig);
+      if (!s && st.originalName) throw new Error('학생을 찾지 못했습니다.');
+      if (!s) { s = { fields: {} }; students.push(s); }
+      dup(students, st.name, orig);
+      if (st.originalName && st.originalName !== st.name) {
+        for (var ds in att) if (att[ds][st.originalName]) { att[ds][st.name] = att[ds][st.originalName]; delete att[ds][st.originalName]; }
+      }
+      s.name = st.name; s.cls = st.cls || ''; s.phone = st.phone || ''; s.fields = st.fields || {};
+      return { ok: true };
+    },
+    deleteStudent: function (name) {
+      students = students.filter(function (s) { return s.name !== name; });
+      return { ok: true };
+    },
+    saveTemplate: function (t) {
+      if (!t || !t.name) throw new Error('템플릿 이름이 없습니다.');
+      var orig = t.originalName || t.name, cur = null;
+      templates.forEach(function (x) { if (x.name === orig) cur = x; });
+      if (!cur && t.originalName) throw new Error('템플릿을 찾지 못했습니다.');
+      if (!cur) { cur = {}; templates.push(cur); }
+      dup(templates, t.name, orig);
+      cur.name = t.name; cur.body = t.body || ''; cur.note = t.note || '';
+      return { name: cur.name, body: cur.body, note: cur.note };
+    },
+    deleteTemplate: function (name) {
+      templates = templates.filter(function (t) { return t.name !== name; });
+      return { ok: true };
+    },
+    saveVariable: function (v) {
+      if (!v || !v.name) throw new Error('변수 이름이 없습니다.');
+      var orig = v.originalName || v.name, cur = null;
+      variables.forEach(function (x) { if (x.name === orig) cur = x; });
+      if (!cur && v.originalName) throw new Error('변수를 찾지 못했습니다.');
+      if (!cur) { cur = {}; variables.push(cur); }
+      dup(variables, v.name, orig);
+      cur.name = v.name; cur.value = v.value || ''; cur.note = v.note || '';
+      return { name: cur.name, value: cur.value, note: cur.note };
+    },
+    deleteVariable: function (name) {
+      variables = variables.filter(function (v) { return v.name !== name; });
+      return { ok: true };
+    },
+    previewTemplate: function (body, studentName) {
+      var s = find(studentName) || { name: studentName || '학생', cls: '', phone: '', fields: {} };
+      var f = fill(body, varsOf(s));
+      var b = bytes(f.text);
+      return { text: f.text, bytes: b, type: b > 90 ? 'LMS' : 'SMS', missing: f.missing };
+    },
+    previewMessages: function (tplName, names) {
+      var t = tplBody(tplName);
+      return (names || []).map(function (n) {
+        var s = find(n) || { name: n, cls: '', phone: '', fields: {} };
+        var f = fill(t, varsOf(s));
+        var b = bytes(f.text);
+        return {
+          name: n, phoneMasked: mask(s.phone), text: f.text, bytes: b,
+          type: b > 90 ? 'LMS' : 'SMS', missing: f.missing,
+          duplicate: !!sentKeys[n + '|' + tplName]
+        };
+      });
+    },
+    sendMessages: function (tplName, names) {
+      return (names || []).map(function (n) {
+        var s = find(n) || { name: n, cls: '', phone: '', fields: {} };
+        var key = n + '|' + tplName;
+        var f = fill(tplBody(tplName), varsOf(s));
+        var result;
+        if (f.missing.length) result = '보류: 빈 변수 ' + f.missing.join(',');
+        else if (sentKeys[key]) result = '중복 건너뜀';
+        else { sentKeys[key] = 1; result = '시험(미발송)'; }
+        pushLog(n, tplName, f.text, result);
+        return { name: n, result: result };
+      });
+    },
+    saveAutomation: function (a) {
+      var rec = null;
+      if (a.row) automations.forEach(function (x) { if (x.row === a.row) rec = x; });
+      if (a.row && !rec) throw new Error('규칙을 찾지 못했습니다.');
+      if (!rec) { rec = { row: nextRow++ }; automations.push(rec); }
+      ['on', 'type', 'minutes', 'time', 'days', 'cls', 'template'].forEach(function (k) { rec[k] = a[k]; });
+      var c = {};
+      for (var k in rec) c[k] = rec[k];
+      c.sentence = sentence(c);
+      return c;
+    },
+    deleteAutomation: function (row) {
+      automations = automations.filter(function (a) { return a.row !== row; });
+      return { ok: true };
+    },
+    setAutomationRunning: function (on) {
+      automationRunning = !!on;
+      return { automationRunning: automationRunning };
+    },
+    getLog: function (limit) {
+      return log.slice(0, limit || 100);
+    },
+    saveSettings: function (s) {
+      settings.academy = s.academy || '';
+      settings.sender = s.sender || '';
+      settings.solapiOn = !!s.solapiOn;
+      return { ok: true };
+    }
+  };
+
+  var okH, failH;
+  var base = {
+    withSuccessHandler: function (f) { okH = f; return runner; },
+    withFailureHandler: function (f) { failH = f; return runner; }
+  };
+  var runner = new Proxy(base, {
+    get: function (t, p) {
+      if (p in t) return t[p];
+      return function () {
+        var a = [].slice.call(arguments);
+        var ok = okH, fail = failH; // 동시 호출끼리 처리기가 섞이지 않게 지금 붙잡는다
+        okH = failH = null;
+        setTimeout(function () {
+          try {
+            var r = api[p] ? api[p].apply(null, a) : undefined;
+            if (ok) ok(r);
+          } catch (e) {
+            if (fail) fail(e);
+          }
+        }, 150);
+      };
+    }
+  });
+  window.google = { script: { run: runner } };
+})();
+</script>
+
+<script>
+// Index.html을 읽어 스텁을 맨 위에 얹은 뒤 iframe srcdoc으로 띄운다(document.write 사용 금지).
+fetch('Index.html').then(function (r) {
+  if (!r.ok) throw new Error('Index.html을 찾지 못했습니다. 같은 폴더에 두고 여세요.');
+  return r.text();
+}).then(function (html) {
+  var code = document.getElementById('gasStub').textContent;
+  var tag = '<scr' + 'ipt>' + code + '</scr' + 'ipt>';
+  var out = /<head[^>]*>/i.test(html)
+    ? html.replace(/<head[^>]*>/i, function (m) { return m + '\n' + tag; })
+    : tag + html;
+  document.getElementById('frame').srcdoc = out;
+}).catch(function (e) {
+  var p = document.createElement('p');
+  p.className = 'fail';
+  p.textContent = e.message || String(e);
+  document.body.appendChild(p);
+});
+</script>
+</body>
+</html>
