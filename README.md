@@ -29,6 +29,10 @@
 2. 시트 메뉴에서 **학원 문자 → 시트 준비(처음 한 번)**을 실행합니다.
 3. Apps Script에서 **웹 앱으로 배포**한 뒤 나온 주소를 엽니다.
 
+### 어렵다면 AI에게 맡기기
+
+Codex나 Claude Code를 쓰신다면 이 저장소 주소와 [블로그 안내](https://haeminway.com/ko/diy/academy-sms-app/)를 주고 "내 구글 계정에 세팅해 줘"라고 하세요. `clasp`로 새 시트와 Apps Script 프로젝트를 만들고 코드를 올릴 수 있습니다(`appsscript.json` 포함). 구글 로그인·권한 허용은 직접 누르고, Solapi 키는 직접 넣으세요. 처음이면 [Apps Script 설정](https://script.google.com/home/usersettings)에서 Apps Script API를 켜야 합니다.
+
 ## 설치 전에 미리보기
 
 이 폴더에서 아래 명령을 실행하세요.
