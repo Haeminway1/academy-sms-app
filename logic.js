@@ -92,10 +92,22 @@ function matchRules(rules, event) {
 }
 
 /** 'HH:mm'을 0시 기준 분으로 바꾼다. 해석할 수 없으면 null. */
+/** '17:00', '17:00:00', '오후 5:00', '5:00 PM'을 모두 '17:00'으로 맞춘다. 못 읽으면 ''. */
+function normalizeHHmm(text) {
+  var t = String(text == null ? '' : text).trim();
+  var m = /(\d{1,2}):(\d{2})/.exec(t);
+  if (!m) return '';
+  var h = +m[1];
+  if (/오후|PM/i.test(t) && h < 12) h += 12;
+  if (/오전|AM/i.test(t) && h === 12) h = 0;
+  if (h > 23 || +m[2] > 59) return '';
+  return ('0' + h).slice(-2) + ':' + m[2];
+}
+
 function hhmmToMinutes(hhmm) {
-  var m = /^\s*(\d{1,2}):(\d{2})/.exec(String(hhmm == null ? '' : hhmm));
-  if (!m) return null;
-  return (+m[1]) * 60 + (+m[2]);
+  var n = normalizeHHmm(hhmm);
+  if (!n) return null;
+  return (+n.slice(0, 2)) * 60 + (+n.slice(3));
 }
 
 /**
@@ -299,6 +311,7 @@ if (typeof module !== 'undefined') {
     isOnValue: isOnValue,
     matchRules: matchRules,
     hhmmToMinutes: hhmmToMinutes,
+    normalizeHHmm: normalizeHHmm,
     isClassDay: isClassDay,
     dueNoShows: dueNoShows,
     toDigits: toDigits,

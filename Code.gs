@@ -281,14 +281,19 @@ function ensureColumn_(sheetName, headerName) {
 
 /** 탭을 [{ 열머리글: 값, ..., _row: 시트행번호 }] 배열로 읽는다. */
 function rowsAsObjects_(sheetName) {
-  var values = sheet_(sheetName).getDataRange().getValues();
+  var range = sheet_(sheetName).getDataRange();
+  var values = range.getValues();
   if (values.length < 2) return [];
+  // 시각만 든 칸(17:00)은 1899년 날짜로 읽혀 시간대 계산이 어긋난다 → 시트에 보이는 글자 그대로 쓴다.
+  var shown = null;
   var header = values[0].map(function (h) { return String(h).trim(); });
   var rows = [];
   for (var i = 1; i < values.length; i++) {
     var o = { _row: i + 1 };
     for (var c = 0; c < header.length; c++) {
-      if (header[c]) o[header[c]] = values[i][c];
+      var v = values[i][c];
+      if (Object.prototype.toString.call(v) === '[object Date]' && v.getFullYear() < 1900) v = (shown = shown || range.getDisplayValues())[i][c];
+      if (header[c]) o[header[c]] = v;
     }
     rows.push(o);
   }
@@ -316,7 +321,7 @@ function readClasses_() {
       row: r._row,
       name: str_(r['반']),
       days: cellText_(r['요일']),
-      start: cellText_(r['시작'])
+      start: normalizeHHmm(cellText_(r['시작'])) || cellText_(r['시작'])
     };
     if (c.name) out.push(c);
   });

@@ -24,7 +24,8 @@ const {
   automationSentence,
   dueLate,
   dueScheduled,
-  ruleKey
+  ruleKey,
+  normalizeHHmm
 } = moduleStub.exports;
 
 const students = [
@@ -639,4 +640,14 @@ test('화면 동기화: 재조회 실패도 저장 결과·버튼을 복구하�
   assert.match(f.node('syncMsg').textContent, /저장은 완료/);
   assert.equal(f.node('setSave').disabled, false);
   assert.equal(f.client.busy(), false);
+});
+
+test('normalizeHHmm: 시트에 보이는 여러 시각 표기를 17:00 꼴로', () => {
+  assert.equal(normalizeHHmm('17:00'), '17:00');
+  assert.equal(normalizeHHmm('17:00:00'), '17:00');
+  assert.equal(normalizeHHmm('오후 5:00:00'), '17:00');
+  assert.equal(normalizeHHmm('5:00 PM'), '17:00');
+  assert.equal(normalizeHHmm('오전 12:30'), '00:30');
+  assert.equal(normalizeHHmm('9:05'), '09:05');
+  assert.equal(normalizeHHmm('없음'), '');
 });
